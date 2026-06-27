@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Chat PDF Exporter</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Outfit:wght@500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="popup-container">
+    <header class="header">
+      <div class="logo-area">
+        <svg class="logo-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M12 2C6.48 2 2 6.48 2 12C2 17.52 6.48 22 12 22C17.52 22 22 17.52 22 12C22 6.48 17.52 2 12 2ZM13 17H11V15H13V17ZM13 13H11V7H13V13Z" fill="currentColor"/>
+        </svg>
+        <h1 class="logo-text">AI Exporter</h1>
+      </div>
+      <span class="version">v1.0.0</span>
+    </header>
+
+    <main class="main-content">
+      <div class="status-card" id="status-card">
+        <div class="status-icon-wrapper spinner" id="status-icon-wrapper">
+          <!-- Animated spinner or checkmark -->
+          <div class="loader"></div>
+        </div>
+        <div class="status-details">
+          <p class="status-title" id="status-title">Detecting Page...</p>
+          <p class="status-desc" id="status-desc">Analyzing the active tab for AI conversation threads...</p>
+        </div>
+      </div>
+
+      <div class="action-section">
+        <button class="btn btn-primary" id="btn-export" disabled>
+          <span>Export to PDF</span>
+          <svg class="btn-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M19 9H15V3H9V9H5L12 16L19 9ZM12 14.17L9.83 12H11V5H13V12H14.17L12 14.17ZM5 18H19V20H5V18Z" fill="currentColor"/>
+          </svg>
+        </button>
+      </div>
+    </main>
+
+    <footer class="footer">
+      <p class="footer-text">Powered by <span>Antigravity</span></p>
+    </footer>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>
