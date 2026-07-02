@@ -1,6 +1,6 @@
 # AI Chat PDF Exporter Chrome Extension
 
-AI Chat PDF Exporter is a lightweight Chrome extension that parses conversations from Claude, ChatGPT, Gemini, and Grok and exports them into beautifully formatted, print-ready PDF files. 
+AI Chat PDF Exporter is a lightweight Chrome extension that parses conversations from Claude, ChatGPT, Gemini, Grok, and Rovo and exports them into beautifully formatted, print-ready PDF files. 
 
 The extension leverages your custom **Typora theme** (`clean-compact.css`) to render high-fidelity documents in **Helvetica**, featuring left-aligned tables with rounded corners and alternating zebra-striping, strictly on a white page background optimized for ink savings.
 
@@ -8,7 +8,7 @@ The extension leverages your custom **Typora theme** (`clean-compact.css`) to re
 
 ## Features
 
-- **Multi-Platform Support**: Scrapes and parses conversation threads dynamically from Claude.ai, ChatGPT.com, Gemini.google.com, and Grok.com.
+- **Multi-Platform Support**: Scrapes and parses conversation threads dynamically from Claude.ai, ChatGPT.com, Gemini.google.com, Grok.com, and Atlassian Rovo.
 - **Typora CSS Styling**: Integrates your exact [clean-compact.css](file:///Users/suddharay/Library/Mobile%20Documents/com~apple~CloudDocs/Mac%20Projects/AI%20Exporter/clean-compact.css) stylesheet to format paragraphs, headers, blockquotes, lists, and code blocks.
 - **Zebra-Striped Rounded Tables**: Converts tables to have 8px rounded corners and alternating light grey shaded rows. Table headers are styled in a light grey-blue and are left-aligned.
 - **Offline Rendering & Image Serialization**: Converts all blob images and credentials-locked images to base64 Data URLs so they load in print preview.
@@ -37,8 +37,9 @@ AI Exporter/
 
 ## Installation
 
-Since this extension is in development, you can load it unpacked directly in Google Chrome:
+Since this extension is in development, you can load it unpacked directly in Google Chrome or Microsoft Edge:
 
+**Google Chrome:**
 1. Open Google Chrome and navigate to: `chrome://extensions/`
 2. Enable **Developer mode** using the toggle switch in the top right corner.
 3. Click the **Load unpacked** button in the top left.
@@ -46,11 +47,18 @@ Since this extension is in development, you can load it unpacked directly in Goo
    `/Users/suddharay/Library/Mobile Documents/com~apple~CloudDocs/Mac Projects/AI Exporter`
 5. The extension **AI Chat PDF Exporter** will appear in your list. Click the Extensions (puzzle piece) icon in your Chrome toolbar and pin it for quick access.
 
+**Microsoft Edge:**
+1. Open Microsoft Edge and navigate to: `edge://extensions/`
+2. Enable **Developer mode** using the toggle switch in the bottom left corner.
+3. Click the **Load unpacked** button near the top right.
+4. Select your workspace root directory as mentioned above.
+5. Pin the extension to your toolbar for quick access.
+
 ---
 
 ## How to Use
 
-1. Open any conversation thread on [Claude](https://claude.ai), [ChatGPT](https://chatgpt.com), [Gemini](https://gemini.google.com), or [Grok](https://grok.com).
+1. Open any conversation thread on [Claude](https://claude.ai), [ChatGPT](https://chatgpt.com), [Gemini](https://gemini.google.com), [Grok](https://grok.com), or Atlassian Rovo.
 2. Click the **AI Exporter** action icon in your Chrome toolbar.
 3. The popup will automatically detect the active AI platform. Click **Export to PDF**.
 4. A new browser tab will open, showing a clean preview of your styled document.

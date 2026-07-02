@@ -13,7 +13,9 @@
     "https://claude.ai/*",
     "https://gemini.google.com/*",
     "https://grok.com/*",
-    "https://x.com/*"
+    "https://x.com/*",
+    "https://*.atlassian.net/*",
+    "https://*.atlassian.com/*"
   ],
   "action": {
     "default_popup": "popup/popup.html"
@@ -25,7 +27,9 @@
         "https://claude.ai/*",
         "https://gemini.google.com/*",
         "https://grok.com/*",
-        "https://x.com/i/grok*"
+        "https://x.com/i/grok*",
+        "https://*.atlassian.net/*",
+        "https://*.atlassian.com/*"
       ],
       "js": ["content.js"],
       "run_at": "document_idle"

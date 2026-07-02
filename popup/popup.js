@@ -62,12 +62,14 @@ document.addEventListener('DOMContentLoaded', async () => {
       platform = 'Gemini';
     } else if (url.includes('grok.com') || url.includes('x.com/i/grok')) {
       platform = 'Grok';
+    } else if (url.includes('atlassian.net') || url.includes('atlassian.com')) {
+      platform = 'Rovo';
     }
 
     if (platform) {
       updateStatus('detected', `${platform} Chat Detected`, `Ready to export the conversation on this tab.`);
     } else {
-      updateStatus('error', 'Not Supported', 'Please open a conversation on Claude, ChatGPT, Gemini, or Grok.');
+      updateStatus('error', 'Not Supported', 'Please open a conversation on Claude, ChatGPT, Gemini, Grok, or Rovo.');
     }
   } catch (err) {
     console.error(err);

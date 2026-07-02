@@ -65,11 +65,30 @@ html, body, #write {
 }
 
 /* Clear background highlights from code elements inside pre blocks to prevent line-by-line highlight effect */
-#write pre code, #write pre.md-fences code {
+#write pre code, #write pre.md-fences code,
+#write [class*="code-block" i] code,
+#write [class*="code-snippet" i] code,
+#write [data-node-type="codeBlock" i] code,
+#write .ak-code-block code {
     background-color: transparent !important;
     background: transparent !important;
     border: none !important;
     padding: 0 !important;
+}
+
+/* Restore the background for generic code-block wrappers */
+#write [class*="code-block" i],
+#write [class*="code-snippet" i],
+#write [data-node-type="codeBlock" i],
+#write .ak-code-block {
+    background-color: #f8f8f8 !important;
+    background: #f8f8f8 !important;
+    border: 1px solid #e0e0e0 !important;
+    border-radius: 10px !important;
+    padding: 0.8rem 1rem !important;
+    display: block !important;
+    margin: 1rem 0 !important;
+    overflow-x: auto !important;
 }
 
 #write blockquote {
@@ -192,9 +211,22 @@ html, body, #write {
     }
 
     /* Clear nested code element backgrounds in print mode */
-    #write pre code, #write pre.md-fences code {
+    #write pre code, #write pre.md-fences code,
+    #write [class*="code-block" i] code,
+    #write [class*="code-snippet" i] code,
+    #write [data-node-type="codeBlock" i] code,
+    #write .ak-code-block code {
         background-color: transparent !important;
         background: transparent !important;
+        border: none !important;
+    }
+
+    #write [class*="code-block" i],
+    #write [class*="code-snippet" i],
+    #write [data-node-type="codeBlock" i],
+    #write .ak-code-block {
+        background-color: #f8f8f8 !important;
+        background: #f8f8f8 !important;
     }
 
     #write code {
