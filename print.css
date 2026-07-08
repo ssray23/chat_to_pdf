@@ -170,6 +170,11 @@ html, body, #write {
     page-break-inside: avoid;
 }
 
+/* Hide SVG UI icons to prevent them from scaling up massively, but preserve math SVGs */
+#write svg:not([class*="mjx" i]):not([class*="math" i]) {
+    display: none !important;
+}
+
 /* Media query to force exact background printing */
 @media print {
     body, html, #write {
@@ -237,6 +242,10 @@ html, body, #write {
     #write blockquote {
         background-color: #f5f5f5 !important;
         background: #f5f5f5 !important;
+    }
+
+    #write svg:not([class*="mjx" i]):not([class*="math" i]) {
+        display: none !important;
     }
 
     #write {
