@@ -1,6 +1,6 @@
 # Chrome Web Store Listing — AI Chat PDF Exporter
 
-> Last Updated: 2026-06-27
+> Last Updated: 2026-07-08
 
 ## Store Listing
 
@@ -8,10 +8,10 @@
 AI Chat PDF Exporter
 
 **Short Description**
-Export conversations from Claude, ChatGPT, Gemini, and Grok into beautifully styled, print-ready PDF files with white backgrounds.
+Export conversations from Claude, ChatGPT, Gemini, Grok, and Atlassian Rovo into beautifully styled, print-ready PDF files with white backgrounds.
 
 **Detailed Description**
-Save your AI conversations exactly as they look online but optimized for printing. AI Chat PDF Exporter reads conversation threads from major AI platforms (including Claude, ChatGPT, Gemini, and Grok) and formats them into neat multi-page PDFs using a premium clean CSS design.
+Save your AI conversations exactly as they look online but optimized for printing. AI Chat PDF Exporter reads conversation threads from major AI platforms (including Claude, ChatGPT, Gemini, Grok, and Atlassian Rovo) and formats them into neat multi-page PDFs using a premium clean CSS design.
 
 Key Features:
 - Preserves all conversation elements: text formatting, mathematical formulas (LaTeX/KaTeX), code blocks, images, and charts/canvases.
@@ -21,7 +21,7 @@ Key Features:
 - Intelligent pagination prevents message blocks from cutting off awkwardly across pages.
 
 How to use it:
-1. Open any active chat on ChatGPT, Claude, Gemini, or Grok.
+1. Open any active chat on ChatGPT, Claude, Gemini, Grok, or Atlassian Rovo.
 2. Click the extension icon in your toolbar.
 3. Click "Export to PDF".
 4. A new print preview page will open, automatically loading your chat. Choose "Save as PDF" or print.
@@ -62,6 +62,8 @@ English
 | `https://gemini.google.com/*` | host_permissions | Scrapes and processes conversation turns, images, and formulas on Gemini. |
 | `https://grok.com/*` | host_permissions | Scrapes and processes conversation turns, images, and formulas on Grok. |
 | `https://x.com/*` | host_permissions | Scrapes and processes Grok conversation turns on Twitter/X. |
+| `https://*.atlassian.net/*` | host_permissions | Scrapes and processes conversation turns, images, and formulas on Atlassian Rovo. |
+| `https://*.atlassian.com/*` | host_permissions | Scrapes and processes conversation turns, images, and formulas on Atlassian Rovo (Admin portals). |
 
 ## Privacy & Data Use
 
@@ -97,7 +99,8 @@ developer@aiexporter.local
 
 | Version | Date | Changes | Status |
 |---------|------|---------|--------|
-| 1.0.0 | 2026-06-27 | Initial release. Supported platforms: ChatGPT, Claude, Gemini, Grok. | Draft |
+| 1.1.0 | 2026-07-08 | Added support for Atlassian Rovo, improved generic code block rendering, and fixed empty bullet artifacts. | Draft |
+| 1.0.0 | 2026-06-27 | Initial release. Supported platforms: ChatGPT, Claude, Gemini, Grok. | Published |
 
 ## Review Notes
 
