@@ -129,6 +129,20 @@ function cleanNoise(clone) {
   clone.querySelectorAll('pre').forEach(pre => {
     pre.querySelectorAll('button, .copy-code-button, [class*="copy"]').forEach(el => el.remove());
   });
+
+  // Remove empty list items (e.g. left behind after removing action buttons)
+  clone.querySelectorAll('li').forEach(li => {
+    if (!li.textContent.trim() && !li.querySelector('img, canvas')) {
+      li.remove();
+    }
+  });
+
+  // Remove empty lists
+  clone.querySelectorAll('ul, ol').forEach(list => {
+    if (list.children.length === 0 || (!list.textContent.trim() && !list.querySelector('img, canvas'))) {
+      list.remove();
+    }
+  });
 }
 
 // Helper to filter out nested child elements of the same selector list
