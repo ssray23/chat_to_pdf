@@ -76,6 +76,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     updateStatus('error', 'Error Occurred', err.message || 'Failed to detect active tab.');
   }
 
+  // Handle capture requests from content.js for cross-origin iframes
+  chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    if (msg.action === 'capture_tab') {
+      chrome.tabs.captureVisibleTab(null, { format: 'png' }, (dataUrl) => {
+        sendResponse({ dataUrl: dataUrl || null });
+      });
+      return true; // Keep channel open
+    }
+  });
+
   // Handle Export button click
   btnExport.addEventListener('click', async () => {
     if (!activeTab || !platform) return;

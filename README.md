@@ -11,9 +11,11 @@ The extension leverages your custom **Typora theme** (`clean-compact.css`) to re
 - **Multi-Platform Support**: Scrapes and parses conversation threads dynamically from Claude.ai, ChatGPT.com, Gemini.google.com, Grok.com, and Atlassian Rovo.
 - **Typora CSS Styling**: Integrates your exact [clean-compact.css](file:///Users/suddharay/Library/Mobile%20Documents/com~apple~CloudDocs/Mac%20Projects/AI%20Exporter/clean-compact.css) stylesheet to format paragraphs, headers, blockquotes, lists, and code blocks.
 - **Zebra-Striped Rounded Tables**: Converts tables to have 8px rounded corners and alternating light grey shaded rows. Table headers are styled in a light grey-blue and are left-aligned.
+- **Language Pill Formatting**: Automatically detects raw code block language labels (e.g. "python", "javascript") and converts them into professional, color-themed UI pills.
 - **Offline Rendering & Image Serialization**: Converts all blob images and credentials-locked images to base64 Data URLs so they load in print preview.
-- **Canvas Conversion**: Automatically converts interactive canvas elements (such as charts and drawings) into static PNG images for printing.
-- **Clean Document Layout**: Renders user queries as blue section headings and assistant replies as continuous body text, avoiding cluttered chat bubbles or avatars.
+- **Auto-Scaling Cross-Origin Widgets**: Dynamically shrinks massive iframes and interactive widgets so they fit inside a single viewport screenshot without being chopped off, then flawlessly restores them to full width in the PDF.
+- **Advanced Widget Header Cleaner**: Aggressively strips out chaotic UI noise, sticky chat overlays, and orphan tool headers (like "V visualize") to leave behind pristine widget graphics.
+- **Clean Document Layout**: Renders user queries as blue section headings and assistant replies as continuous body text, completely eliminating clutter and forcing long code blocks to wrap cleanly without scrollbars.
 - **Strictly White Background**: Implements a universal print reset to force all custom wrappers, cards, and page wrappers to be transparent, ensuring zero gray background panels behind tables or text.
 - **MV3 & CSP Compliant**: Strictly structured under Manifest V3 security standards, isolating script execution to avoid browser Content Security Policy (CSP) blocks.
 
@@ -78,10 +80,11 @@ When you click export, the extension queries the DOM for conversation messages. 
 
 The scraper executes a custom tree filter (`getUniqueElements()`) to eliminate duplicate nested tags and sorts the messages in chronological order.
 
-### 2. Image and Canvas Serialization
-To prevent image loading failures in the local printable tab (due to origin-locked blob URLs or CORS blocks):
+### 2. Image, Canvas, and Iframe Serialization
+To prevent media loading failures in the local printable tab (due to origin-locked blob URLs or CORS blocks):
 - Every `img` tag's source is loaded and drawn onto an offscreen canvas to extract its base64 data string.
 - Every `<canvas>` element (e.g. data visualizations or charts) is captured via `canvas.toDataURL()` and replaced with a static PNG `<img>` tag.
+- Cross-origin `<iframe>` widgets (like Claude's interactive components) are temporarily auto-scaled to fit the viewport, captured via the Chrome tabs API, perfectly cropped, and exported as full-resolution static graphics.
 
 ### 3. Local Print Rendering (`print.js` & `print.html`)
 The extracted chat nodes are stored in `chrome.storage.local` and loaded into the extension's local tab. Under Manifest V3, inline script execution is prohibited; therefore, rendering and print triggering are handled safely within a separate `print.js` file.

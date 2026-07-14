@@ -53,6 +53,9 @@ html, body, #write {
     border-radius: 10px !important;
     padding: 0.8rem 1rem !important;
     display: block !important;
+    white-space: pre-wrap !important;
+    word-wrap: break-word !important;
+    overflow-x: hidden !important;
 }
 
 /* Inline code (not inside pre) background highlight */
@@ -62,6 +65,8 @@ html, body, #write {
     border: 1px solid #e0e0e0 !important;
     border-radius: 4px !important;
     padding: 0.1em 0.4em !important;
+    white-space: pre-wrap !important;
+    word-wrap: break-word !important;
 }
 
 /* Clear background highlights from code elements inside pre blocks to prevent line-by-line highlight effect */
@@ -74,6 +79,8 @@ html, body, #write {
     background: transparent !important;
     border: none !important;
     padding: 0 !important;
+    white-space: pre-wrap !important;
+    word-wrap: break-word !important;
 }
 
 /* Restore the background for generic code-block wrappers */
@@ -88,7 +95,35 @@ html, body, #write {
     padding: 0.8rem 1rem !important;
     display: block !important;
     margin: 1rem 0 !important;
-    overflow-x: auto !important;
+    white-space: pre-wrap !important;
+    word-wrap: break-word !important;
+    overflow-x: hidden !important;
+}
+
+/* Code language label styling */
+#write .code-language-pill-wrapper {
+    margin-bottom: 8px !important;
+    margin-top: 16px !important;
+    display: block !important;
+}
+
+#write .code-language-pill {
+    display: inline-block !important;
+    background-color: #eaf3fa !important; /* light blue matching theme */
+    color: #5e9ed6 !important; /* Theme accent blue */
+    padding: 3px 12px !important;
+    border-radius: 20px !important;
+    font-family: 'Helvetica', Arial, sans-serif !important;
+    font-size: 0.75rem !important;
+    font-weight: 700 !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.5px !important;
+    border: 1px solid #cce0f1 !important;
+    box-shadow: none !important;
+    margin-bottom: -4px !important;
+    position: relative !important;
+    z-index: 10 !important;
+    line-height: 1.2 !important;
 }
 
 #write blockquote {
@@ -170,8 +205,12 @@ html, body, #write {
     page-break-inside: avoid;
 }
 
-/* Hide SVG UI icons to prevent them from scaling up massively, but preserve math SVGs */
-#write svg:not([class*="mjx" i]):not([class*="math" i]) {
+/* Ensure SVGs don't scale up massively if they lose their sizing CSS, but preserve them for charts/widgets */
+#write svg {
+    max-width: 100%;
+}
+/* specifically hide known stray ui icons if any */
+#write svg.icon-md {
     display: none !important;
 }
 
@@ -244,7 +283,7 @@ html, body, #write {
         background: #f5f5f5 !important;
     }
 
-    #write svg:not([class*="mjx" i]):not([class*="math" i]) {
+    #write svg.icon-md {
         display: none !important;
     }
 
