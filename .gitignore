@@ -2,3 +2,5 @@
 .agents/
 .gemini/
 *.log
+node_modules/
+

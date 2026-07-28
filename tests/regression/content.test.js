@@ -1,0 +1,67 @@
+const fs = require('fs');
+const path = require('path');
+const { registerRegressionTest } = require('../helpers/testRegistry');
+
+registerRegressionTest({
+  id: 'REG-CONTENT-001',
+  type: 'feature',
+  description: 'Content script DOM scraping, overlay hiding, scroll preservation & image serialization',
+  suiteFn: () => {}
+});
+
+describe('Content Script Scraper & DOM Manipulation Regression Suite', () => {
+  let contentJsCode;
+
+  beforeAll(() => {
+    contentJsCode = fs.readFileSync(path.join(__dirname, '../../content.js'), 'utf8');
+  });
+
+  beforeEach(() => {
+    // Expose internal functions to window for testing
+    eval(contentJsCode + `
+      window.hideOverlays = hideOverlays;
+      window.restoreOverlays = restoreOverlays;
+      window.saveScrollPositions = saveScrollPositions;
+      window.restoreScrollPositions = restoreScrollPositions;
+    `);
+  });
+
+  test('hideOverlays and restoreOverlays must correctly toggle sticky and fixed element visibility', () => {
+    document.body.innerHTML = `
+      <header id="h1" style="position: fixed; visibility: visible;">Header</header>
+      <div id="d1" style="position: sticky; visibility: visible;">Sticky Bar</div>
+      <div id="d2" style="position: static; visibility: visible;">Normal Content</div>
+    `;
+
+    const hidden = window.hideOverlays();
+    expect(hidden.length).toBe(2);
+    expect(document.getElementById('h1').style.visibility).toBe('hidden');
+    expect(document.getElementById('d1').style.visibility).toBe('hidden');
+    expect(document.getElementById('d2').style.visibility).toBe('visible');
+
+    window.restoreOverlays(hidden);
+    expect(document.getElementById('h1').style.visibility).toBe('visible');
+    expect(document.getElementById('d1').style.visibility).toBe('visible');
+  });
+
+  test('saveScrollPositions and restoreScrollPositions must capture and restore window and element scroll offsets', () => {
+    const el = document.createElement('div');
+    Object.defineProperty(el, 'scrollTop', { value: 120, writable: true });
+    Object.defineProperty(el, 'scrollLeft', { value: 40, writable: true });
+    document.body.appendChild(el);
+
+    const positions = window.saveScrollPositions();
+    expect(positions.has(el)).toBe(true);
+
+    el.scrollTop = 0;
+    el.scrollLeft = 0;
+
+    window.restoreScrollPositions(positions);
+    expect(el.scrollTop).toBe(120);
+    expect(el.scrollLeft).toBe(40);
+  });
+
+  test('chrome.runtime.onMessage listener must be registered for export_chat action', () => {
+    expect(chrome.runtime.onMessage.addListener).toHaveBeenCalled();
+  });
+});

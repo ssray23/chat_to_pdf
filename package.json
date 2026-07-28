@@ -1,0 +1,18 @@
+{
+  "name": "ai-chat-pdf-exporter",
+  "version": "1.1.0",
+  "description": "Export conversations from Claude, ChatGPT, Gemini, Grok, and Rovo into PDF documents.",
+  "main": "content.js",
+  "type": "commonjs",
+  "scripts": {
+    "test": "jest --colors",
+    "test:coverage": "jest --coverage",
+    "prebuild": "npm test",
+    "build": "node scripts/build.js",
+    "add-test": "node scripts/add-test.js"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "jest-environment-jsdom": "^29.7.0"
+  }
+}

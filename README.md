@@ -16,7 +16,9 @@ The extension leverages your custom **Typora theme** (`clean-compact.css`) to re
 - **Auto-Scaling Cross-Origin Widgets**: Dynamically shrinks massive iframes and interactive widgets so they fit inside a single viewport screenshot without being chopped off, then flawlessly restores them to full width in the PDF.
 - **Advanced Widget Header Cleaner**: Aggressively strips out chaotic UI noise, sticky chat overlays, and orphan tool headers (like "V visualize") to leave behind pristine widget graphics.
 - **Clean Document Layout**: Renders user queries as blue section headings and assistant replies as continuous body text, completely eliminating clutter and forcing long code blocks to wrap cleanly without scrollbars.
+- **Single Code Block Container**: Enforces strictly 1 outer container card for code blocks across all platforms (such as Gemini's complex nested web components), cleanly eliminating multi-box nesting artifacts while preserving language pill badges.
 - **Strictly White Background**: Implements a universal print reset to force all custom wrappers, cards, and page wrappers to be transparent, ensuring zero gray background panels behind tables or text.
+- **Dynamic Regression Testing Suite**: Integrates an automated pre-build test runner that validates platform auto-detection, DOM scraping, single code block container structure, and Manifest V3 schema before packaging.
 - **MV3 & CSP Compliant**: Strictly structured under Manifest V3 security standards, isolating script execution to avoid browser Content Security Policy (CSP) blocks.
 
 ---
