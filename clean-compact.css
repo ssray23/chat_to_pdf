@@ -81,7 +81,7 @@ body {
 #write h6 {
     font-weight: 600;
     line-height: 1.2;
-    margin: 1.4rem 0 0.5rem 0;
+    margin: 0.8rem 0 0.35rem 0;
     padding: 0;
     color: var(--text-primary);
 }
@@ -94,21 +94,38 @@ body {
     margin-top: 0;
 }
 
-#write h2 {
-    font-size: 1.5rem;
+#write h2,
+#write .user-prompt-heading {
+    font-size: 1.35rem;
     color: var(--accent-blue);
     border-bottom: 1px solid var(--border-light);
     padding-bottom: 0.2rem;
 }
 
-#write h3 {
-    font-size: 1.3rem;
-    color: var(--accent-teal);
+#write .assistant-response-body h2 {
+    color: var(--text-primary);
+    font-size: 1.35rem;
+    font-weight: 700;
+    border-bottom: none;
+    padding-bottom: 0;
+    margin-top: 1.1rem;
+    margin-bottom: 0.4rem;
 }
 
-#write h4 {
+#write h3,
+#write .assistant-response-body h3 {
+    font-size: 1.25rem;
+    color: var(--accent-teal);
+    margin-top: 0.9rem;
+    margin-bottom: 0.35rem;
+}
+
+#write h4,
+#write .assistant-response-body h4 {
     font-size: 1.15rem;
     color: var(--text-primary);
+    margin-top: 0.7rem;
+    margin-bottom: 0.25rem;
 }
 
 #write h5 {
@@ -125,8 +142,16 @@ body {
 
 /* Paragraph text */
 #write p {
-    margin: 0.6rem 0;
-    line-height: 1.5;
+    margin: 0.35rem 0;
+    line-height: 1.55;
+}
+
+#write p:empty,
+#write div:empty,
+#write p:has(> br:only-child) {
+    display: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
 }
 
 /* Links - subtle but clear */
@@ -158,14 +183,28 @@ body {
 /* Lists - compact spacing */
 #write ul,
 #write ol {
-    padding-left: 1.6rem;
-    margin: 0.5rem 0;
+    padding-left: 1.5rem;
+    margin: 0.35rem 0;
 }
 
 #write ul li,
 #write ol li {
-    margin: 0.15rem 0;
-    line-height: 1.5;
+    margin: 0.2rem 0;
+    line-height: 1.55;
+}
+
+/* Prevent nested paragraph tags inside list items from doubling vertical margin gaps */
+#write li p,
+#write ul li p,
+#write ol li p {
+    margin: 0 !important;
+    padding: 0 !important;
+    display: inline !important;
+}
+
+#write li > p + p {
+    margin-top: 0.25rem !important;
+    display: block !important;
 }
 
 #write ul li::marker {

@@ -52,6 +52,18 @@ describe('Popup Platform Auto-Detection & Messaging Regression Suite', () => {
     expect(document.getElementById('btn-export').disabled).toBe(false);
   });
 
+  test('auto-detects Rovo platform from active tab URL', async () => {
+    await runPopupScriptWithMockTab('https://mycompany.atlassian.net/jira/rovo');
+    expect(document.getElementById('status-title').textContent).toContain('Rovo Chat Detected');
+    expect(document.getElementById('btn-export').disabled).toBe(false);
+  });
+
+  test('auto-detects Grok platform from active tab URL', async () => {
+    await runPopupScriptWithMockTab('https://grok.com/chat/xyz');
+    expect(document.getElementById('status-title').textContent).toContain('Grok Chat Detected');
+    expect(document.getElementById('btn-export').disabled).toBe(false);
+  });
+
   test('shows error when tab is unsupported URL', async () => {
     await runPopupScriptWithMockTab('https://example.com');
     expect(document.getElementById('status-title').textContent).toBe('Not Supported');
