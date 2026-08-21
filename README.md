@@ -16,11 +16,11 @@ The extension leverages your custom **Typora theme** (`clean-compact.css`) to re
 - **Zebra-Striped Rounded Tables**: Converts tables to have 8px rounded corners and alternating light grey shaded rows. Table headers are styled in a light grey-blue and are left-aligned.
 - **Language Pill Formatting**: Automatically detects raw code block language labels (e.g. "python", "javascript") and converts them into professional, color-themed UI pills.
 - **Offline Rendering & Image Serialization**: Converts all blob images, Atlaskit media cards, and credentials-locked images to base64 Data URLs so they load in print preview.
-- **Auto-Scaling Cross-Origin Widgets**: Dynamically shrinks massive iframes and interactive widgets so they fit inside a single viewport screenshot without being chopped off, then flawlessly restores them to full width in the PDF.
-- **Advanced Widget & Noise Cleaner**: Aggressively strips out chaotic UI noise, copy buttons, feedback/debug ratings (`↳ Good response`, `↳ Debug response`), and composer toolbars while guaranteeing zero content wipeout.
+- **Auto-Scaling Cross-Origin Widgets & Artifacts**: Dynamically captures high-resolution screenshots of interactive iframes, Mermaid charts, and React/SVG artifact diagrams (like Claude flowcharts) across all subdomains and origins, flawlessly embedding them at full width in the export.
+- **Advanced Widget & Noise Cleaner**: Aggressively strips out chaotic UI noise, reasoning dropdowns (`Thought for Xs`), tool status bars (`V Connecting to visualize...`), copy buttons, and feedback controls while strictly preserving visual media and conversational content.
 - **Single Code Block Container**: Enforces strictly 1 outer container card for code blocks across all platforms (such as Gemini's complex nested web components), cleanly eliminating multi-box nesting artifacts while preserving language pill badges.
 - **Strictly White Background**: Implements a universal print reset to force all custom wrappers, cards, and page wrappers to be transparent, ensuring zero gray background panels behind tables or text.
-- **Dynamic Regression Testing Suite**: Integrates an automated pre-build test runner (34 tests across 8 suites) that validates platform auto-detection, DOM scraping, media card extraction, non-regression content preservation, and Manifest V3 schema before packaging.
+- **Dynamic Regression Testing Suite**: Integrates an automated pre-build test runner (38 tests across 8 suites) that validates platform auto-detection, DOM scraping, media card extraction, non-regression visual preservation, and Manifest V3 schema before packaging.
 - **MV3 & CSP Compliant**: Strictly structured under Manifest V3 security standards, isolating script execution to avoid browser Content Security Policy (CSP) blocks.
 
 ---

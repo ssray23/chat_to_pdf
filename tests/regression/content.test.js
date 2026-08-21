@@ -122,4 +122,59 @@ describe('Content Script Scraper & DOM Manipulation Regression Suite', () => {
     expect(img).not.toBeNull();
     expect(img.src).toContain('data:image/png;base64');
   });
+
+  test('cleanNoise preserves SVG diagrams inside tool-use blocks and removes non-visual tool calls', () => {
+    eval(contentJsCode + `
+      window.cleanNoise = cleanNoise;
+    `);
+
+    const container = document.createElement('div');
+    container.innerHTML = `
+      <div class="tool-use non-visual-tool" data-testid="tool-search">
+        <summary>search_web({"query":"test"})</summary>
+        <div class="raw-output">Found 10 results</div>
+      </div>
+      <div class="tool-use visual-tool" data-testid="tool-visualize">
+        <summary>visualize show_widget</summary>
+        <div class="chart-container">
+          <svg width="400" height="200"><circle cx="50" cy="50" r="40" /></svg>
+        </div>
+      </div>
+    `;
+
+    window.cleanNoise(container);
+
+    // Non-visual tool call must be completely removed
+    expect(container.textContent).not.toContain('search_web');
+    expect(container.textContent).not.toContain('Found 10 results');
+
+    // Visual tool must preserve the SVG and strip the tool header text
+    expect(container.textContent).not.toContain('visualize show_widget');
+    const svg = container.querySelector('svg');
+    expect(svg).not.toBeNull();
+    expect(svg.querySelector('circle')).not.toBeNull();
+  });
+
+  test('deepCloneWithShadowsAndSvgs converts captured iframe to full-width image replacement', () => {
+    eval(contentJsCode + `
+      window.deepCloneWithShadowsAndSvgs = deepCloneWithShadowsAndSvgs;
+      window.capturedIframes = capturedIframes;
+    `);
+
+    const iframe = document.createElement('iframe');
+    iframe.src = 'https://artifacts.claude.ai/widget123';
+    document.body.appendChild(iframe);
+
+    // Mock captured screenshot in WeakMap
+    const testDataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+    window.capturedIframes.set(iframe, testDataUrl);
+
+    const cloned = window.deepCloneWithShadowsAndSvgs(iframe);
+    expect(cloned.tagName.toLowerCase()).toBe('img');
+    expect(cloned.src).toBe(testDataUrl);
+    expect(cloned.style.width).toBe('100%');
+    expect(cloned.style.height).toBe('auto');
+
+    iframe.remove();
+  });
 });
