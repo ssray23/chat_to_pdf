@@ -72,8 +72,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
-  // 4. Normalize Atlassian Smart Links, Jira issue lozenges, and list spacing
-  normalizeSmartLinksAndLists(threadContainer);
+  // 4. Normalize Atlassian Smart Links, Jira issue lozenges, and list spacing for Rovo
+  if (chat.platform === 'Rovo' || (chat.title && chat.title.includes('Rovo'))) {
+    normalizeSmartLinksAndLists(threadContainer);
+  }
 
   // 5. Clear stored chat data to avoid bloating storage
   await chrome.storage.local.remove('chatData');
@@ -174,19 +176,21 @@ function normalizeSmartLinksAndLists(container) {
   });
 
   // 3. Format suggested prompt rows starting with ↳ (excluding feedback/debug controls)
-  container.querySelectorAll('p, div, li, span, a').forEach(el => {
+  container.querySelectorAll('button, a, .suggested-prompt, [class*="suggestion" i], [class*="suggested" i]').forEach(el => {
     const text = el.textContent.trim();
     if (/(good response|bad response|debug response|provide feedback|give feedback|was this helpful|rate response|report response)/i.test(text)) {
       el.remove();
       return;
     }
     if ((text.startsWith('↳') || text.startsWith('⤷')) && !el.classList.contains('rovo-suggested-prompt') && !el.closest('.rovo-suggested-prompt')) {
-      const cleanPrompt = text.replace(/^[↳⤷\s]+/, '').trim();
-      if (cleanPrompt) {
-        const div = document.createElement('div');
-        div.className = 'rovo-suggested-prompt';
-        div.innerHTML = `<span class="suggested-prompt-arrow">↳</span> <span class="suggested-prompt-text">${cleanPrompt}</span>`;
-        el.replaceWith(div);
+      if (text.length < 250 && el.querySelectorAll('p, div, pre, blockquote, table, ol, ul').length === 0) {
+        const cleanPrompt = text.replace(/^[↳⤷\s]+/, '').trim();
+        if (cleanPrompt) {
+          const div = document.createElement('div');
+          div.className = 'rovo-suggested-prompt';
+          div.innerHTML = `<span class="suggested-prompt-arrow">↳</span> <span class="suggested-prompt-text">${cleanPrompt}</span>`;
+          el.replaceWith(div);
+        }
       }
     }
   });

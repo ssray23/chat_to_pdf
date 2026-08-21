@@ -438,8 +438,7 @@ function cleanNoise(clone) {
 
     const isSuggestedPrompt = !isActionControl && !isFeedbackOrDebug && (
       (el.matches && el.matches('[data-testid*="suggest" i], [data-testid*="followup" i], [class*="suggest" i], [class*="followup" i]')) ||
-      text.startsWith('↳') || text.startsWith('⤷') ||
-      (text.length > 12 && !el.closest('form, footer, [class*="composer" i], [class*="toolbar" i]'))
+      text.startsWith('↳') || text.startsWith('⤷')
     );
 
     if (isMediaCard || hasMediaCardChild || hasImage || hasBgImage) {
@@ -491,6 +490,12 @@ function cleanNoise(clone) {
     '[class*="thumbs-down"]',
     '[class*="copy-button"]',
     '.chat-actions',
+    '[data-testid*="thinking" i]',
+    '[data-testid*="thought" i]',
+    '[class*="thinking" i]',
+    '[class*="thought" i]',
+    '[class*="Thinking" i]',
+    '[class*="Thought" i]',
     'summary', // Removes tool use headers like 'V visualize show_widget' since they use details/summary
     '[data-testid*="tool"]',
     '[class*="tool-use"]',
@@ -521,6 +526,15 @@ function cleanNoise(clone) {
     try {
       clone.querySelectorAll(selector).forEach(el => el.remove());
     } catch (e) {}
+  });
+
+  // Remove Claude "Thought for Xs" / reasoning collapsible blocks
+  clone.querySelectorAll('button, div, summary, p, span').forEach(el => {
+    const text = el.textContent.trim();
+    if (/^thought for \d+s/i.test(text) || /^thought for a few seconds/i.test(text) || /^thinking(\.\.\.)?$/i.test(text)) {
+      const details = el.closest('details') || el;
+      details.remove();
+    }
   });
 
   // Remove copy buttons from inside pre blocks
@@ -603,8 +617,11 @@ function cleanNoise(clone) {
   // Format language labels as pills
   formatLanguagePills(clone);
 
-  // Normalize Atlassian Smart Links, Jira issue lozenges, and list spacing
-  normalizeSmartLinksAndLists(clone);
+  // Normalize Atlassian Smart Links, Jira issue lozenges, and list spacing on Atlassian platforms
+  const currentUrl = typeof window !== 'undefined' && window.location ? window.location.href : '';
+  if (currentUrl.includes('atlassian.net') || currentUrl.includes('atlassian.com')) {
+    normalizeSmartLinksAndLists(clone);
+  }
 }
 
 // Normalize Atlassian Smart Links, Jira issue lozenges, and list item spacing
@@ -697,19 +714,21 @@ function normalizeSmartLinksAndLists(container) {
   });
 
   // 3. Format suggested prompt rows starting with ↳ (excluding feedback/debug controls)
-  container.querySelectorAll('p, div, li, span, a').forEach(el => {
+  container.querySelectorAll('button, a, .suggested-prompt, [class*="suggestion" i], [class*="suggested" i]').forEach(el => {
     const text = el.textContent.trim();
     if (/(good response|bad response|debug response|provide feedback|give feedback|was this helpful|rate response|report response)/i.test(text)) {
       el.remove();
       return;
     }
     if ((text.startsWith('↳') || text.startsWith('⤷')) && !el.classList.contains('rovo-suggested-prompt') && !el.closest('.rovo-suggested-prompt')) {
-      const cleanPrompt = text.replace(/^[↳⤷\s]+/, '').trim();
-      if (cleanPrompt) {
-        const div = document.createElement('div');
-        div.className = 'rovo-suggested-prompt';
-        div.innerHTML = `<span class="suggested-prompt-arrow">↳</span> <span class="suggested-prompt-text">${cleanPrompt}</span>`;
-        el.replaceWith(div);
+      if (text.length < 250 && el.querySelectorAll('p, div, pre, blockquote, table, ol, ul').length === 0) {
+        const cleanPrompt = text.replace(/^[↳⤷\s]+/, '').trim();
+        if (cleanPrompt) {
+          const div = document.createElement('div');
+          div.className = 'rovo-suggested-prompt';
+          div.innerHTML = `<span class="suggested-prompt-arrow">↳</span> <span class="suggested-prompt-text">${cleanPrompt}</span>`;
+          el.replaceWith(div);
+        }
       }
     }
   });

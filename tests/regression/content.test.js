@@ -64,4 +64,35 @@ describe('Content Script Scraper & DOM Manipulation Regression Suite', () => {
   test('chrome.runtime.onMessage listener must be registered for export_chat action', () => {
     expect(chrome.runtime.onMessage.addListener).toHaveBeenCalled();
   });
+
+  test('cleanNoise removes Claude "Thought for Xs" / thinking blocks without corrupting response text', () => {
+    eval(contentJsCode + `
+      window.cleanNoise = cleanNoise;
+    `);
+
+    const container = document.createElement('div');
+    container.innerHTML = `
+      <div data-testid="thinking-block" class="thinking-collapsible">
+        <summary>Thought for 7s</summary>
+        <p>Thinking about orchestrator architecture...</p>
+      </div>
+      <button class="thought-summary">Thought for 7s</button>
+      <div class="response-content">
+        <p>Yes, this is far more useful. It directly answers your question.</p>
+        <p>Layer 0: what this diagram actually shows...</p>
+      </div>
+    `;
+
+    window.cleanNoise(container);
+
+    // Thinking noise must be stripped
+    expect(container.textContent).not.toContain('Thought for 7s');
+    expect(container.textContent).not.toContain('Thinking about orchestrator');
+
+    // Genuine conversational content MUST be preserved and NOT turned into a link
+    expect(container.textContent).toContain('Yes, this is far more useful');
+    expect(container.textContent).toContain('Layer 0: what this diagram actually shows');
+    expect(container.querySelector('.rovo-suggested-prompt')).toBeNull();
+    expect(container.querySelector('a')).toBeNull();
+  });
 });
