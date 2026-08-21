@@ -37,10 +37,29 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
-  // 3. Clear stored chat data to avoid bloating storage
+  // 3. Normalize tables: ensure headers are in thead and data rows are in tbody for clean zebra striping
+  const tables = threadContainer.querySelectorAll('table');
+  tables.forEach(table => {
+    if (!table.querySelector('thead')) {
+      const firstRow = table.querySelector('tr');
+      if (firstRow && firstRow.querySelector('th')) {
+        const thead = document.createElement('thead');
+        thead.appendChild(firstRow);
+        table.insertBefore(thead, table.firstChild);
+      }
+    }
+    const dataRows = Array.from(table.querySelectorAll('tr')).filter(r => !r.closest('thead'));
+    if (dataRows.length > 0 && !table.querySelector('tbody')) {
+      const tbody = document.createElement('tbody');
+      dataRows.forEach(r => tbody.appendChild(r));
+      table.appendChild(tbody);
+    }
+  });
+
+  // 4. Clear stored chat data to avoid bloating storage
   await chrome.storage.local.remove('chatData');
 
-  // 4. Trigger print after a short delay to ensure rendering completes
+  // 5. Trigger print after a short delay to ensure rendering completes
   setTimeout(() => {
     window.print();
   }, 500);

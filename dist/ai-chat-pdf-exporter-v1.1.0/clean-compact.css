@@ -301,7 +301,7 @@ body {
 }
 
 /* Tables - clean grid */
-/* Tables - Final Polish with Zebra Stripes & Light Header */
+/* Tables - Final Polish with Zebra Stripes & Light Gray Header */
 #write table {
     border-collapse: separate; 
     border-spacing: 0;
@@ -311,26 +311,46 @@ body {
     border-radius: 8px;        
     overflow: hidden;          
     box-shadow: var(--shadow-subtle);
-    font-size: 0.88rem;
+    font-size: 0.85rem;
 }
 
 #write th,
 #write td {
     border-bottom: 1px solid var(--border-light);
     border-right: 1px solid var(--border-light);
-    padding: 0.5rem 0.75rem;
+    padding: 0.35rem 0.65rem;
+    line-height: 1.35;
+    font-size: 0.85rem;
 }
 
-/* 1. Lightened Header Background */
+#write th p,
+#write td p,
+#write th > *,
+#write td > *,
+#write table p,
+#write table span {
+    margin: 0 !important;
+    padding: 0 !important;
+    line-height: 1.35 !important;
+    font-size: 0.85rem !important;
+}
+
+/* 1. Header Background - Light Gray Fill */
 #write th {
-    background: #f9f9f9; /* Softer than the standard tertiary grey */
+    background: var(--bg-tertiary); /* #f5f5f5 */
     color: var(--text-primary);
     font-weight: 600;
 }
 
-/* 2. Restore Alternate Row Shading (Zebra Stripes) */
-#write tr:nth-child(even) {
+/* 2. Alternate Row Shading (Zebra Stripes: Row 1 White, Row 2 Shaded) */
+#write tbody tr:nth-child(even),
+#write tbody tr:nth-child(even) td {
     background: var(--bg-tertiary); /* Uses #f5f5f5 from your variables */
+}
+
+#write tbody tr:nth-child(odd),
+#write tbody tr:nth-child(odd) td {
+    background: #ffffff;
 }
 
 /* 3. Clean up the edge borders */
@@ -344,7 +364,8 @@ body {
 }
 
 /* Hover effect */
-#write tr:hover {
+#write tbody tr:hover,
+#write tbody tr:hover td {
     background: rgba(94, 158, 214, 0.05);
 }
 
