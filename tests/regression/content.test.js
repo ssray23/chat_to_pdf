@@ -95,4 +95,31 @@ describe('Content Script Scraper & DOM Manipulation Regression Suite', () => {
     expect(container.querySelector('.rovo-suggested-prompt')).toBeNull();
     expect(container.querySelector('a')).toBeNull();
   });
+
+  test('cleanNoise preserves visualization diagram in tool container and strips "Connecting to visualize..." header', () => {
+    eval(contentJsCode + `
+      window.cleanNoise = cleanNoise;
+    `);
+
+    const container = document.createElement('div');
+    container.innerHTML = `
+      <div class="tool-use-container">
+        <summary class="tool-header">V Connecting to visualize...</summary>
+        <div class="widget-view">
+          <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==" alt="Diagram" style="width: 100%; height: auto;" />
+        </div>
+      </div>
+    `;
+
+    window.cleanNoise(container);
+
+    // "Connecting to visualize" header text must be removed
+    expect(container.textContent).not.toContain('Connecting to visualize');
+    expect(container.textContent.trim()).not.toBe('V');
+
+    // The visual diagram image must be intact
+    const img = container.querySelector('img');
+    expect(img).not.toBeNull();
+    expect(img.src).toContain('data:image/png;base64');
+  });
 });

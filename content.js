@@ -64,97 +64,90 @@ function restoreScrollPositions(scrollPositions) {
 
 // Find and capture screenshots of cross-origin widget iframes before cloning
 async function captureCrossoriginIframes() {
-  const iframes = document.querySelectorAll('iframe');
-  let hasCrossoriginIframes = false;
-  for (const iframe of iframes) {
-    if (iframe.src && (iframe.src.includes('claudemcpcontent.com') || iframe.src.includes('claudeusercontent.com'))) {
-      hasCrossoriginIframes = true;
-      break;
-    }
-  }
-  
-  if (!hasCrossoriginIframes) return;
+  const iframes = Array.from(document.querySelectorAll('iframe'));
+  if (iframes.length === 0) return;
 
   const hiddenOverlays = hideOverlays();
   const scrollPositions = saveScrollPositions();
 
   for (const iframe of iframes) {
-    if (iframe.src && (iframe.src.includes('claudemcpcontent.com') || iframe.src.includes('claudeusercontent.com'))) {
-      const origTransform = iframe.style.transform;
-      const origTransformOrigin = iframe.style.transformOrigin;
-      let scaled = false;
-      let scale = 1;
+    const initialRect = iframe.getBoundingClientRect();
+    // Ignore invisible, detached, or tiny tracking iframes
+    if (initialRect.width < 20 || initialRect.height < 20) continue;
 
-      // If the iframe is taller or wider than the viewport, scale it down so it fits in a single screenshot
-      const initialRect = iframe.getBoundingClientRect();
-      const maxW = window.innerWidth;
-      const maxH = window.innerHeight;
-      
-      if (initialRect.height > maxH) scale = maxH / initialRect.height;
-      if (initialRect.width * scale > maxW) scale = Math.min(scale, maxW / initialRect.width);
-      
-      if (scale < 1) {
-        iframe.style.transform = `scale(${scale})`;
-        iframe.style.transformOrigin = 'center center';
-        scaled = true;
-        await new Promise(resolve => setTimeout(resolve, 50)); // Wait for reflow
-      }
+    const origTransform = iframe.style.transform;
+    const origTransformOrigin = iframe.style.transformOrigin;
+    let scaled = false;
+    let scale = 1;
 
-      iframe.scrollIntoView({ behavior: 'instant', block: 'center' });
-      await new Promise(resolve => setTimeout(resolve, 600)); // wait for scroll/render
-      
-      const rect = iframe.getBoundingClientRect();
-      if (rect.width > 0 && rect.height > 0) {
-        try {
-          const response = await new Promise((resolve) => {
-            chrome.runtime.sendMessage({ action: 'capture_tab' }, res => {
-              if (chrome.runtime.lastError) resolve(null);
-              else resolve(res);
-            });
+    // If the iframe is taller or wider than the viewport, scale it down so it fits in a single screenshot
+    const maxW = window.innerWidth;
+    const maxH = window.innerHeight;
+    
+    if (initialRect.height > maxH) scale = maxH / initialRect.height;
+    if (initialRect.width * scale > maxW) scale = Math.min(scale, maxW / initialRect.width);
+    
+    if (scale < 1) {
+      iframe.style.transform = `scale(${scale})`;
+      iframe.style.transformOrigin = 'center center';
+      scaled = true;
+      await new Promise(resolve => setTimeout(resolve, 50)); // Wait for reflow
+    }
+
+    iframe.scrollIntoView({ behavior: 'instant', block: 'center' });
+    await new Promise(resolve => setTimeout(resolve, 600)); // wait for scroll/render
+    
+    const rect = iframe.getBoundingClientRect();
+    if (rect.width > 0 && rect.height > 0) {
+      try {
+        const response = await new Promise((resolve) => {
+          chrome.runtime.sendMessage({ action: 'capture_tab' }, res => {
+            if (chrome.runtime.lastError) resolve(null);
+            else resolve(res);
+          });
+        });
+        
+        if (response && response.dataUrl) {
+          const img = new Image();
+          await new Promise((resolve, reject) => {
+            img.onload = resolve;
+            img.onerror = reject;
+            img.src = response.dataUrl;
           });
           
-          if (response && response.dataUrl) {
-            const img = new Image();
-            await new Promise((resolve, reject) => {
-              img.onload = resolve;
-              img.onerror = reject;
-              img.src = response.dataUrl;
-            });
-            
-            const canvas = document.createElement('canvas');
-            
-            // Calculate exact physical pixel scaling
-            const scaleX = img.naturalWidth / window.innerWidth;
-            const scaleY = img.naturalHeight / window.innerHeight;
-            
-            // Bounds check the crop to ensure we don't draw outside the image (and clamp > 0)
-            const sx = Math.max(0, rect.left * scaleX);
-            const sy = Math.max(0, rect.top * scaleY);
-            const sw = Math.max(1, Math.min(rect.width * scaleX, img.naturalWidth - sx));
-            const sh = Math.max(1, Math.min(rect.height * scaleY, img.naturalHeight - sy));
-            
-            canvas.width = sw;
-            canvas.height = sh;
-            const ctx = canvas.getContext('2d');
-            
-            // Draw cropped portion
-            ctx.drawImage(
-              img, 
-              sx, sy, sw, sh,
-              0, 0, canvas.width, canvas.height
-            );
-            
-            capturedIframes.set(iframe, canvas.toDataURL('image/png'));
-          }
-        } catch (e) {
-          console.warn('Failed to capture iframe:', e);
+          const canvas = document.createElement('canvas');
+          
+          // Calculate exact physical pixel scaling
+          const scaleX = img.naturalWidth / window.innerWidth;
+          const scaleY = img.naturalHeight / window.innerHeight;
+          
+          // Bounds check the crop to ensure we don't draw outside the image (and clamp > 0)
+          const sx = Math.max(0, rect.left * scaleX);
+          const sy = Math.max(0, rect.top * scaleY);
+          const sw = Math.max(1, Math.min(rect.width * scaleX, img.naturalWidth - sx));
+          const sh = Math.max(1, Math.min(rect.height * scaleY, img.naturalHeight - sy));
+          
+          canvas.width = sw;
+          canvas.height = sh;
+          const ctx = canvas.getContext('2d');
+          
+          // Draw cropped portion
+          ctx.drawImage(
+            img, 
+            sx, sy, sw, sh,
+            0, 0, canvas.width, canvas.height
+          );
+          
+          capturedIframes.set(iframe, canvas.toDataURL('image/png'));
         }
+      } catch (e) {
+        console.warn('Failed to capture iframe:', e);
       }
-      
-      if (scaled) {
-        iframe.style.transform = origTransform;
-        iframe.style.transformOrigin = origTransformOrigin;
-      }
+    }
+    
+    if (scaled) {
+      iframe.style.transform = origTransform;
+      iframe.style.transformOrigin = origTransformOrigin;
     }
   }
   
@@ -484,7 +477,6 @@ function cleanNoise(clone) {
     '.self-end',
     '.text-token-text-secondary',
     'svg.icon-md',
-    '.feedback-button',
     // Claude
     '.flex.gap-1.items-center',
     '[class*="thumbs-down"]',
@@ -496,9 +488,6 @@ function cleanNoise(clone) {
     '[class*="thought" i]',
     '[class*="Thinking" i]',
     '[class*="Thought" i]',
-    'summary', // Removes tool use headers like 'V visualize show_widget' since they use details/summary
-    '[data-testid*="tool"]',
-    '[class*="tool-use"]',
     // Gemini
     '.message-actions',
     'button-row',
@@ -526,6 +515,39 @@ function cleanNoise(clone) {
     try {
       clone.querySelectorAll(selector).forEach(el => el.remove());
     } catch (e) {}
+  });
+
+  // Remove non-media tool containers, but PRESERVE tools that contain visual media (iframes, imgs, canvases, svgs)
+  clone.querySelectorAll('[data-testid*="tool" i], [class*="tool-use" i], [class*="toolUse" i], details').forEach(toolEl => {
+    const hasVisualMedia = toolEl.querySelector('img, iframe, canvas, svg') !== null;
+    if (!hasVisualMedia) {
+      toolEl.remove();
+    } else {
+      toolEl.querySelectorAll('summary, button, [class*="header" i], [class*="status" i]').forEach(hdr => {
+        const text = hdr.textContent.trim().toLowerCase();
+        if (text.includes('visualize') || text.includes('connecting') || text.includes('show_widget') || text.includes('tool') || text === 'v') {
+          hdr.remove();
+        }
+      });
+    }
+  });
+
+  // Clean orphan tool status text (e.g. "V Connecting to visualize...", "visualize show_widget")
+  clone.querySelectorAll('p, div, span, summary, button').forEach(el => {
+    const text = el.textContent.trim().toLowerCase();
+    if (
+      text === 'v' || 
+      text === 'connecting to visualize...' || 
+      text === 'connecting to visualize' ||
+      text.startsWith('v connecting to visualize') ||
+      text.startsWith('connecting to visualize') ||
+      text.includes('visualize show_widget') ||
+      text.includes('show_visual')
+    ) {
+      if (!el.querySelector('img, iframe, svg, canvas')) {
+        el.remove();
+      }
+    }
   });
 
   // Remove Claude "Thought for Xs" / reasoning collapsible blocks
@@ -577,16 +599,16 @@ function cleanNoise(clone) {
       const hasWidgetMedia = el.querySelector('img, iframe') || ['img', 'iframe'].includes(el.tagName.toLowerCase());
       if (hasWidgetMedia) {
         const text = el.textContent.toLowerCase();
-        if (text.includes('visualize') || text.includes('show_widget') || text.includes('show_visual')) {
+        if (text.includes('visualize') || text.includes('show_widget') || text.includes('show_visual') || text.includes('connecting')) {
           Array.from(el.children).forEach(child => {
             // Check if this branch actually contains the main widget (ignore tiny icons)
-            const branchHasWidget = Array.from(child.querySelectorAll('img, iframe')).some(media => {
+            const branchHasWidget = Array.from(child.querySelectorAll('img, iframe, svg, canvas')).some(media => {
               if (media.tagName.toLowerCase() === 'iframe') return true;
               // If it's an image, it must be the captured screenshot or a reasonably sized image, not a tiny icon
               return (media.src && media.src.startsWith('data:image/png')) || 
                      media.clientWidth > 50 || media.clientHeight > 50 || 
                      media.style.width === '100%' || media.style.height === 'auto';
-            }) || (['img', 'iframe'].includes(child.tagName.toLowerCase()));
+            }) || (['img', 'iframe', 'svg', 'canvas'].includes(child.tagName.toLowerCase()));
 
             if (!branchHasWidget) {
               const childText = child.textContent.trim();
@@ -596,6 +618,7 @@ function cleanNoise(clone) {
               const isToolText = lowerText.includes('visualize') || 
                                  lowerText.includes('show_widget') || 
                                  lowerText.includes('show_visual') ||
+                                 lowerText.includes('connecting') ||
                                  lowerText === 'v' || lowerText === '';
 
               // Protect user text, but override if it perfectly matches the tool text heuristics
