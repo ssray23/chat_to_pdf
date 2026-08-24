@@ -177,4 +177,228 @@ describe('Content Script Scraper & DOM Manipulation Regression Suite', () => {
 
     iframe.remove();
   });
+
+  test('classifyTurnRole accurately distinguishes user prompts and assistant responses using multi-signal scoring', () => {
+    eval(contentJsCode + `
+      window.classifyTurnRole = classifyTurnRole;
+    `);
+
+    // 1. Explicit semantic role
+    const elUser = document.createElement('div');
+    elUser.setAttribute('data-message-author-role', 'user');
+    expect(window.classifyTurnRole(elUser, 0, 2)).toBe('user');
+
+    const elAssistant = document.createElement('div');
+    elAssistant.setAttribute('data-message-author-role', 'assistant');
+    expect(window.classifyTurnRole(elAssistant, 1, 2)).toBe('assistant');
+
+    // 2. Rich markdown fingerprint (code block, table, math)
+    const elMarkdown = document.createElement('div');
+    elMarkdown.innerHTML = '<h3>Solution</h3><table><tr><th>Col</th></tr></table><pre><code>console.log(1);</code></pre>';
+    expect(window.classifyTurnRole(elMarkdown, 0, 1)).toBe('assistant');
+
+    // 3. User query with alignment class
+    const elQuery = document.createElement('div');
+    elQuery.className = 'flex justify-end self-end query-bubble';
+    elQuery.textContent = 'How do I set a sleep timer on Apple TV?';
+    expect(window.classifyTurnRole(elQuery, 0, 2)).toBe('user');
+  });
+
+  test('getChatMessages extracts conversation from ChatGPT public /share/... pages without article tags', async () => {
+    eval(contentJsCode + `
+      window.getChatMessages = getChatMessages;
+    `);
+
+    // Mock share page DOM structure (no <article> tags, using [data-message-id] or .markdown containers)
+    document.body.innerHTML = `
+      <div id="__next">
+        <main>
+          <div data-message-id="msg-1" class="user-turn">
+            <div class="whitespace-pre-wrap">How do I set sleep timer on Apple TV?</div>
+          </div>
+          <div data-message-id="msg-2" class="assistant-turn">
+            <div class="markdown">
+              <p>To set a sleep timer on Apple TV:</p>
+              <ol>
+                <li>Press and hold the TV/Control Center button on your Siri Remote.</li>
+                <li>Select the Sleep Timer icon and choose 15, 30, or 60 minutes.</li>
+              </ol>
+            </div>
+          </div>
+        </main>
+      </div>
+    `;
+
+    // Set mock share page URL
+    delete window.location;
+    window.location = new URL('https://chatgpt.com/share/6a8c2cd0-ad7c-83ed-8c35-50633760e67b');
+
+    const messages = await window.getChatMessages('ChatGPT');
+    expect(messages.length).toBe(2);
+    expect(messages[0].role).toBe('user');
+    expect(messages[0].html).toContain('How do I set sleep timer on Apple TV?');
+    expect(messages[1].role).toBe('assistant');
+    expect(messages[1].html).toContain('Press and hold the TV/Control Center button');
+  });
+
+  test('getChatMessages extracts from embedded SSR JSON payload on ChatGPT share pages when DOM is deferred', async () => {
+    eval(contentJsCode + `
+      window.getChatMessages = getChatMessages;
+    `);
+
+    const sharePayload = {
+      title: "Apple TV Sleep After",
+      mapping: {
+        "node-1": {
+          message: {
+            author: { role: "user" },
+            content: { parts: ["Can I set Apple TV to sleep after 30 mins?"] }
+          }
+        },
+        "node-2": {
+          message: {
+            author: { role: "assistant" },
+            content: { parts: ["Yes, use the Control Center sleep timer shortcut."] }
+          }
+        }
+      }
+    };
+
+    document.body.innerHTML = `
+      <script id="client-bootstrap" type="application/json">
+        ${JSON.stringify(sharePayload)}
+      </script>
+      <div id="loading-spinner">Loading conversation...</div>
+    `;
+
+    delete window.location;
+    window.location = new URL('https://chatgpt.com/share/6a8c2cd0-ad7c-83ed-8c35-50633760e67b');
+
+    const messages = await window.getChatMessages('ChatGPT');
+    expect(messages.length).toBe(2);
+    expect(messages[0].role).toBe('user');
+    expect(messages[0].html).toContain('Can I set Apple TV to sleep after 30 mins?');
+    expect(messages[1].role).toBe('assistant');
+    expect(messages[1].html).toContain('Control Center sleep timer shortcut');
+  });
+
+  test('getChatMessages extracts Perplexity query, answer, source cards, and tables', async () => {
+    eval(contentJsCode + `
+      window.getChatMessages = getChatMessages;
+    `);
+
+    document.body.innerHTML = `
+      <div class="thread-container">
+        <div class="query-block" data-testid="user-query">
+          <h1 class="text-textMain">Compare React vs Vue 2026 performance</h1>
+        </div>
+        <div class="answer-block prose" data-testid="thread-answer">
+          <p>Here is a detailed comparison:</p>
+          <table>
+            <thead><tr><th>Framework</th><th>Bundle Size</th></tr></thead>
+            <tbody><tr><td>React</td><td>42kb</td></tr><tr><td>Vue</td><td>33kb</td></tr></tbody>
+          </table>
+          <div class="source-card">
+            <span class="source-title">Framework Benchmarks 2026</span>
+          </div>
+        </div>
+      </div>
+    `;
+
+    delete window.location;
+    window.location = new URL('https://www.perplexity.ai/search/react-vs-vue');
+
+    const messages = await window.getChatMessages('Perplexity');
+    expect(messages.length).toBe(2);
+    expect(messages[0].role).toBe('user');
+    expect(messages[0].html).toContain('Compare React vs Vue 2026 performance');
+    expect(messages[1].role).toBe('assistant');
+    expect(messages[1].html).toContain('Framework Benchmarks 2026');
+    expect(messages[1].html).toContain('Bundle Size');
+  });
+
+  test('extractAdaptiveTurns self-adapts and extracts turns from obfuscated DOM structures', () => {
+    eval(contentJsCode + `
+      window.extractAdaptiveTurns = extractAdaptiveTurns;
+    `);
+
+    const root = document.createElement('div');
+    root.innerHTML = `
+      <div class="x-obfuscated-container">
+        <div class="c_8921a user-message">
+          <p>Explain quantum annealing in simple terms</p>
+        </div>
+        <div class="c_8921b assistant-message prose">
+          <p>Quantum annealing is an optimization method that uses quantum fluctuations...</p>
+          <pre><code>q = QuantumOptimizer()</code></pre>
+        </div>
+      </div>
+    `;
+
+    const turns = window.extractAdaptiveTurns(root);
+    expect(turns.length).toBe(2);
+    expect(turns[0].role).toBe('user');
+    expect(turns[0].contentEl.textContent).toContain('Explain quantum annealing');
+    expect(turns[1].role).toBe('assistant');
+    expect(turns[1].contentEl.textContent).toContain('Quantum annealing is an optimization method');
+  });
+
+  test('formatLanguagePills only matches genuine language identifiers and ignores conversational headings', () => {
+    eval(contentJsCode + `
+      window.formatLanguagePills = formatLanguagePills;
+      window.cleanNoise = cleanNoise;
+    `);
+
+    const container = document.createElement('div');
+    container.innerHTML = `
+      <div>SO THERE IS A MISMATCH:</div>
+      <pre><code>Mac (audio) -> Apple TV (idle timer) -> Sleep</code></pre>
+      <div class="code-header"><span>python</span></div>
+      <pre><code>def test(): pass</code></pre>
+    `;
+
+    window.cleanNoise(container);
+
+    // "SO THERE IS A MISMATCH:" must NOT be turned into a code-language-pill
+    const mismatchEl = Array.from(container.querySelectorAll('*')).find(el => el.textContent.includes('SO THERE IS A MISMATCH:'));
+    expect(mismatchEl.classList.contains('code-language-pill')).toBe(false);
+
+    // "python" MUST be turned into a code-language-pill
+    const pythonPill = container.querySelector('.code-language-pill');
+    expect(pythonPill).not.toBeNull();
+    expect(pythonPill.textContent.trim()).toBe('python');
+
+    // Code blocks must preserve their full text
+    expect(container.textContent).toContain('Mac (audio) -> Apple TV (idle timer) -> Sleep');
+    expect(container.textContent).toContain('def test(): pass');
+  });
+  test('cleanNoise preserves code blocks with tailwind composer variables but removes genuine composer containers', () => {
+    eval(contentJsCode + `
+      window.cleanNoise = cleanNoise;
+    `);
+
+    const container = document.createElement('div');
+    container.innerHTML = `
+      <div class="composer-container">
+        <textarea>Write your prompt here...</textarea>
+      </div>
+      <div class="code-block-wrapper dark:[--code-block-surface:var(--composer-surface-primary)]">
+        <pre><code>console.log("Hello");</code></pre>
+      </div>
+      <div class="PromptContainer">
+        <button aria-label="Add sources">Add</button>
+      </div>
+    `;
+
+    window.cleanNoise(container);
+
+    // Genuine composer containers and prompt inputs should be removed
+    expect(container.textContent).not.toContain('Write your prompt here...');
+    expect(container.querySelector('.composer-container')).toBeNull();
+    expect(container.querySelector('.PromptContainer')).toBeNull();
+
+    // Code blocks with tailwind css variables matching "composer" MUST be preserved
+    expect(container.textContent).toContain('console.log("Hello");');
+    expect(container.querySelector('pre')).not.toBeNull();
+  });
 });

@@ -337,7 +337,15 @@ async function processImages(containerEl) {
 
 
 // Style language labels above code blocks into professional pills
+// Style language labels above code blocks into professional pills
 function formatLanguagePills(clone) {
+  const KNOWN_LANGUAGES = new Set([
+    'javascript', 'js', 'typescript', 'ts', 'jsx', 'tsx', 'python', 'py', 'html', 'css', 'scss', 'sass', 'less',
+    'bash', 'sh', 'zsh', 'shell', 'json', 'yaml', 'yml', 'xml', 'sql', 'c', 'cpp', 'c++', 'c#', 'csharp', 'cs',
+    'java', 'rust', 'rs', 'go', 'golang', 'ruby', 'rb', 'php', 'swift', 'kotlin', 'kt', 'scala', 'r', 'dart',
+    'lua', 'perl', 'dockerfile', 'docker', 'graphql', 'markdown', 'md', 'diff', 'makefile', 'plaintext', 'text', 'txt', 'console', 'terminal'
+  ]);
+
   clone.querySelectorAll('pre').forEach(pre => {
     let current = pre;
     let header = null;
@@ -346,9 +354,19 @@ function formatLanguagePills(clone) {
     for (let i = 0; i < 3; i++) {
       if (current.previousElementSibling) {
         let sibling = current.previousElementSibling;
-        const text = sibling.textContent.trim();
-        // Check if it's a short text block (like "python", "javascript") without nested paragraphs
-        if (text.length > 0 && text.length < 25 && !sibling.querySelector('p') && !sibling.querySelector('pre')) {
+        const text = sibling.textContent.trim().toLowerCase();
+        
+        // Strictly require valid language token or explicit language header element
+        const isKnownLang = KNOWN_LANGUAGES.has(text) || (/^[a-z0-9+#.-]{1,12}$/i.test(text) && (
+          (sibling.className && typeof sibling.className === 'string' && (
+            sibling.className.toLowerCase().includes('lang') || 
+            sibling.className.toLowerCase().includes('header')
+          )) ||
+          sibling.getAttribute('data-language') ||
+          (sibling.parentElement && typeof sibling.parentElement.className === 'string' && sibling.parentElement.className.toLowerCase().includes('header'))
+        ));
+        
+        if (isKnownLang && !sibling.querySelector('p') && !sibling.querySelector('pre')) {
           header = sibling;
           break;
         }
@@ -389,8 +407,8 @@ function cleanNoise(clone) {
     '[data-testid*="prompt-input" i]',
     '[data-testid*="prompt-editor" i]',
     '[data-testid*="chat-input" i]',
-    '[class*="Composer" i]',
-    '[class*="composer" i]',
+    '[class*="Composer" i]:not([class*="--composer" i])',
+    '[class*="composer" i]:not([class*="--composer" i])',
     '[class*="PromptBar" i]',
     '[class*="prompt-bar" i]',
     '[class*="PromptInput" i]',
@@ -465,29 +483,57 @@ function cleanNoise(clone) {
       div.innerHTML = `<span class="suggested-prompt-arrow">↳</span> <span class="suggested-prompt-text">${cleanPrompt}</span>`;
       el.replaceWith(div);
     } else {
-      // Remove all action buttons (+Add, Submit, Auto, Copy, Thumbs, Feedback, etc.)
-      el.remove();
+      // If it's a large text block (like an expandable tool log, timeline, or code block), preserve it.
+      // Real UI action buttons rarely have > 80 characters of text.
+      if (text.length > 80 && !isActionControl) {
+        el.removeAttribute('role');
+        el.removeAttribute('tabindex');
+        if (el.tagName.toLowerCase() === 'button') {
+          const div = document.createElement('div');
+          for (let i = 0; i < el.attributes.length; i++) {
+            const attr = el.attributes[i];
+            div.setAttribute(attr.name, attr.value);
+          }
+          while (el.firstChild) {
+            div.appendChild(el.firstChild);
+          }
+          el.replaceWith(div);
+        }
+      } else {
+        // Remove all short action buttons (+Add, Submit, Auto, Copy, Thumbs, Feedback, etc.)
+        el.remove();
+      }
     }
   });
   
-  // 3. Remove platform-specific layout controls
+  // 3. Remove platform-specific layout controls and action bars (targeted selectors only)
   const noiseSelectors = [
-    // ChatGPT
-    '.flex.justify-between.lg\\:rect',
-    '.self-end',
-    '.text-token-text-secondary',
-    'svg.icon-md',
-    // Claude
-    '.flex.gap-1.items-center',
+    // ChatGPT Action bars & feedback buttons
+    '[data-testid*="action-bar" i]',
+    '[data-testid*="copy-turn-action-button" i]',
+    '[data-testid*="good-response-turn-action-button" i]',
+    '[data-testid*="bad-response-turn-action-button" i]',
+    '[aria-label*="Read aloud" i]',
+    '[aria-label*="Good response" i]',
+    '[aria-label*="Bad response" i]',
+    // Claude Actions & Thinking Collapsibles
+    '.chat-actions',
     '[class*="thumbs-down"]',
     '[class*="copy-button"]',
-    '.chat-actions',
     '[data-testid*="thinking" i]',
     '[data-testid*="thought" i]',
     '[class*="thinking" i]',
     '[class*="thought" i]',
     '[class*="Thinking" i]',
     '[class*="Thought" i]',
+    // Perplexity
+    '.query-actions',
+    '.answer-actions',
+    '[data-testid*="share" i]',
+    '[aria-label*="Rewrite" i]',
+    '[aria-label*="Copy" i]',
+    '[aria-label*="Search web" i]',
+    '[aria-label*="Search images" i]',
     // Gemini
     '.message-actions',
     'button-row',
@@ -517,18 +563,28 @@ function cleanNoise(clone) {
     } catch (e) {}
   });
 
-  // Remove non-media tool containers, but PRESERVE tools that contain visual media (iframes, imgs, canvases, svgs)
-  clone.querySelectorAll('[data-testid*="tool" i], [class*="tool-use" i], [class*="toolUse" i], details').forEach(toolEl => {
-    const hasVisualMedia = toolEl.querySelector('img, iframe, canvas, svg') !== null;
-    if (!hasVisualMedia) {
-      toolEl.remove();
-    } else {
+  // Remove empty pre or code containers that have no text and no visual media
+  clone.querySelectorAll('pre, [class*="code-block" i]').forEach(el => {
+    if (!el.textContent.trim() && !el.querySelector('img, svg, canvas, iframe')) {
+      el.remove();
+    }
+  });
+
+  // Remove non-media tool-call containers, but ALWAYS preserve code blocks, pre elements, tables, and text
+  clone.querySelectorAll('[data-testid="tool-use-block"], [data-testid="tool-result-block"], .tool-use, .toolUse').forEach(toolEl => {
+    // If it contains code, pre, table, or readable text, never remove it
+    if (toolEl.querySelector('pre, code, table, p, ul, ol') || toolEl.textContent.trim().length > 80) {
       toolEl.querySelectorAll('summary, button, [class*="header" i], [class*="status" i]').forEach(hdr => {
         const text = hdr.textContent.trim().toLowerCase();
-        if (text.includes('visualize') || text.includes('connecting') || text.includes('show_widget') || text.includes('tool') || text === 'v') {
+        if (text.includes('visualize') || text.includes('connecting') || text.includes('show_widget') || text === 'v') {
           hdr.remove();
         }
       });
+      return;
+    }
+    const hasVisualMedia = toolEl.querySelector('img, iframe, canvas, svg') !== null;
+    if (!hasVisualMedia) {
+      toolEl.remove();
     }
   });
 
@@ -559,9 +615,39 @@ function cleanNoise(clone) {
     }
   });
 
-  // Remove copy buttons from inside pre blocks
-  clone.querySelectorAll('pre').forEach(pre => {
-    pre.querySelectorAll('button, .copy-code-button, [class*="copy"]').forEach(el => el.remove());
+  // Remove copy buttons and clipboard icons from inside and above code blocks
+  clone.querySelectorAll('pre, [class*="code-block" i], code-block').forEach(pre => {
+    pre.querySelectorAll('button, .copy-code-button, button[class*="copy" i], [aria-label*="Copy" i], [data-testid*="copy" i]').forEach(el => el.remove());
+    // Also remove copy svg icons inside code container
+    pre.querySelectorAll('svg').forEach(svg => {
+      const parentBtn = svg.closest('button, a, [role="button"]');
+      if (parentBtn || svg.classList.contains('icon-sm') || svg.classList.contains('icon-md')) {
+        svg.remove();
+      }
+    });
+  });
+
+  // Remove search source citation favicons/icons (e.g. giant Reddit, Apple logos attached to links)
+  clone.querySelectorAll('a img, a svg, [data-testid*="source" i]:not([data-testid="sources-pill"]) img, [class*="citation" i] img, [class*="attribution" i] img, [class*="source" i]:not(.atlassian-sources-pill) img, [class*="source" i]:not(.atlassian-sources-pill) svg').forEach(media => {
+    media.remove();
+  });
+
+  // Remove standalone favicon / logo images where parent or sibling has text
+  clone.querySelectorAll('img, svg').forEach(img => {
+    const alt = (img.getAttribute('alt') || '').toLowerCase().trim();
+    const src = (img.getAttribute('src') || img.src || '').toLowerCase();
+    
+    // Aggressively match site names often used in search citations
+    const isFaviconOrLogo = 
+      alt.includes('reddit') || alt.includes('apple support') || alt.includes('apple.com') || alt.includes('favicon') || alt.includes('logo') || alt.includes('icon') ||
+      src.includes('favicon') || src.includes('google.com/s2/favicons') || src.includes('gstatic.com/favicon') || src.includes('icons.duckduckgo.com') ||
+      src.includes('redditstatic.com') || (src.includes('apple.com') && (src.includes('favicon') || src.includes('touch-icon') || src.includes('logo') || src.includes('nav_apple_icon'))) ||
+      // Remove tiny inline images which are usually icons/favicons that blow up in print
+      (img.tagName.toLowerCase() === 'img' && (img.width > 0 && img.width <= 32 || parseInt(img.getAttribute('width')) <= 32));
+    
+    if (isFaviconOrLogo) {
+      img.remove();
+    }
   });
 
   // Remove empty list items (e.g. left behind after removing action buttons)
@@ -578,10 +664,11 @@ function cleanNoise(clone) {
     }
   });
 
-  // Remove empty paragraphs, divs with only whitespace/nbsp/br, or standalone br tags
+  // Remove empty paragraphs, divs with only whitespace/nbsp/br, or standalone br tags (excluding code/pre blocks)
   clone.querySelectorAll('p, div, span').forEach(el => {
+    if (el.closest('pre, code, textarea')) return;
     const text = el.textContent.replace(/\u00a0/g, ' ').trim();
-    const hasMedia = el.querySelector('img, svg, canvas, iframe, video, .ai-exporter-media-card, .atlassian-smart-chip, .atlassian-sources-pill, .rovo-suggested-prompt');
+    const hasMedia = el.querySelector('img, svg, canvas, iframe, video, .ai-exporter-media-card, .atlassian-smart-chip, .atlassian-sources-pill, .rovo-suggested-prompt, pre, code, table');
     if (!text && !hasMedia) {
       if (['p', 'div', 'span'].includes(el.tagName.toLowerCase())) {
         el.remove();
@@ -914,16 +1001,270 @@ function deepCloneWithShadowsAndSvgs(originalNode) {
   return clone;
 }
 
-// Scrape chat messages by platform
+// Check if an element or its descendants have a distinct user bubble background color (blue, gray, dark pill, etc.)
+function hasUserBubbleStyle(el) {
+  if (!el) return false;
+  try {
+    const cs = window.getComputedStyle(el);
+    const bg = cs.backgroundColor || '';
+    if (bg && bg !== 'transparent' && bg !== 'rgba(0, 0, 0, 0)') {
+      const match = bg.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+      if (match) {
+        const r = parseInt(match[1], 10);
+        const g = parseInt(match[2], 10);
+        const b = parseInt(match[3], 10);
+        // Blue bubble
+        if (b > 160 && b > r + 25 && b > g + 20) return true;
+        // Dark gray/charcoal bubble in light mode or distinct pill in dark mode
+        if (r === g && g === b && (r < 60 || (r > 220 && r < 250))) return true;
+      }
+    }
+    const radius = parseFloat(cs.borderRadius) || 0;
+    if (radius >= 12 && cs.display !== 'inline') return true;
+  } catch (e) {}
+  return false;
+}
+
+// Multi-Signal Role Classifier: scores an element to determine if it is a user turn or assistant turn
+function classifyTurnRole(el, index = 0, totalTurns = 1) {
+  if (!el) return 'assistant';
+  
+  let score = 0; // Positive => User, Negative => Assistant
+  const tagName = el.tagName ? el.tagName.toLowerCase() : '';
+  const className = el.className && typeof el.className === 'string' ? el.className.toLowerCase() : '';
+  const testId = (el.getAttribute('data-testid') || '').toLowerCase();
+  const authorRole = (el.getAttribute('data-message-author-role') || el.getAttribute('data-role') || el.getAttribute('role') || '').toLowerCase();
+  
+  // 1. Explicit semantic attributes (Highest weight: +/- 15)
+  if (authorRole === 'user' || authorRole === 'human') return 'user';
+  if (authorRole === 'assistant' || authorRole === 'agent' || authorRole === 'model' || authorRole === 'bot') return 'assistant';
+  if (tagName === 'user-query') return 'user';
+  if (tagName === 'model-response') return 'assistant';
+  if (el.querySelector('[data-message-author-role="user"]')) return 'user';
+  if (el.querySelector('[data-message-author-role="assistant"]')) return 'assistant';
+
+  // 2. Class & TestID semantic markers (+/- 6)
+  if (/\b(user|human|query|prompt|sent|user-message)\b/.test(className) || /\b(user|human|query|prompt)\b/.test(testId)) {
+    score += 6;
+  }
+  if (/\b(assistant|agent|model|response|bot|answer|claude-message|rovo|prose)\b/.test(className) || /\b(assistant|agent|model|response|bot|answer)\b/.test(testId)) {
+    score -= 6;
+  }
+
+  // 3. Rich Markdown / Assistant Content Fingerprint
+  const hasCodeBlock = el.querySelector('pre, code.hljs, [class*="code-block" i]') !== null;
+  const hasTable = el.querySelector('table') !== null;
+  const hasMath = el.querySelector('.katex, .MathJax, [data-math]') !== null;
+  const hasHeadings = el.querySelector('h1, h2, h3, h4, h5, h6') !== null;
+  const hasSources = el.querySelector('[data-testid*="source" i], [class*="source" i], [class*="citation" i]') !== null;
+  const hasMarkdown = el.querySelector('.markdown, .prose, [class*="markdown" i], [class*="prose" i]') !== null;
+  
+  if (hasMarkdown) score -= 4;
+  if (hasCodeBlock) score -= 4;
+  if (hasTable) score -= 4;
+  if (hasMath) score -= 3;
+  if (hasHeadings) score -= 2;
+  if (hasSources) score -= 3;
+
+  // 4. Layout Geometry and Alignment (+/- 4)
+  try {
+    const cs = window.getComputedStyle(el);
+    if (cs.marginLeft === 'auto' || cs.justifyContent === 'flex-end' || cs.alignSelf === 'flex-end' || cs.textAlign === 'right') {
+      score += 4;
+    }
+    if (className.includes('self-end') || className.includes('items-end') || className.includes('justify-end')) {
+      score += 4;
+    }
+  } catch (e) {}
+
+  // 5. Visual Bubble Styling & Color Contrast
+  if (hasUserBubbleStyle(el) || el.querySelector('[style*="rgb(12, 102, 228)"], [style*="rgb(0, 82, 204)"], [style*="rgb(0, 101, 255)"]')) {
+    score += 4;
+  }
+
+  // 6. Tie-breaker via Alternating Rhythm Parity
+  if (score === 0) {
+    if (index % 2 === 0) {
+      score += 2;
+    } else {
+      score -= 2;
+    }
+  }
+
+  return score >= 0 ? 'user' : 'assistant';
+}
+
+// Extract ChatGPT /share/ public page content (DOM and SSR JSON payload fallback)
+function extractChatGPTShareMessages() {
+  const extracted = [];
+  
+  // 1. Try DOM elements with [data-message-id] or articles
+  const messageNodes = document.querySelectorAll('[data-message-id], [data-testid*="conversation-turn"], [data-testid*="message"], article');
+  if (messageNodes.length > 0) {
+    const unique = getUniqueElements(messageNodes);
+    for (let i = 0; i < unique.length; i++) {
+      const node = unique[i];
+      const role = classifyTurnRole(node, i, unique.length);
+      const contentEl = node.querySelector('[data-message-author-role="assistant"]') || 
+                        node.querySelector('[data-message-author-role="user"]') || 
+                        node.querySelector('[data-message-author-role]') || 
+                        node.querySelector('.whitespace-pre-wrap') || 
+                        node;
+      extracted.push({ role, contentEl });
+    }
+    if (extracted.length > 0) return extracted;
+  }
+
+  // 2. Try querying .markdown containers and matching with prompt elements
+  const allBlocks = getUniqueElements(document.querySelectorAll('h1, h2, h3, .whitespace-pre-wrap, .markdown, div[class*="markdown" i]'));
+  if (allBlocks.length > 0) {
+    for (let i = 0; i < allBlocks.length; i++) {
+      const el = allBlocks[i];
+      const role = classifyTurnRole(el, i, allBlocks.length);
+      extracted.push({ role, contentEl: el });
+    }
+    if (extracted.length > 0) return extracted;
+  }
+
+  // 3. Fallback: Parse embedded JSON state (e.g. client-bootstrap, __NEXT_DATA__)
+  try {
+    const scripts = document.querySelectorAll('script[type="application/json"], script#__NEXT_DATA__, script#client-bootstrap');
+    for (const script of scripts) {
+      const raw = script.textContent.trim();
+      if (!raw || (!raw.includes('mapping') && !raw.includes('linear_conversation') && !raw.includes('message') && !raw.includes('title'))) continue;
+      
+      const data = JSON.parse(raw);
+      const foundMessages = [];
+      const traverse = (obj) => {
+        if (!obj || typeof obj !== 'object') return;
+        if (obj.message && obj.message.content && obj.message.author) {
+          const role = obj.message.author.role === 'user' ? 'user' : 'assistant';
+          const parts = obj.message.content.parts || [];
+          const text = parts.filter(p => typeof p === 'string').join('\n');
+          if (text.trim()) {
+            foundMessages.push({ role, text });
+          }
+        }
+        for (const key of Object.keys(obj)) {
+          traverse(obj[key]);
+        }
+      };
+      traverse(data);
+
+      if (foundMessages.length > 0) {
+        for (const m of foundMessages) {
+          const div = document.createElement('div');
+          if (m.role === 'assistant') {
+            div.className = 'markdown';
+          }
+          div.textContent = m.text;
+          extracted.push({ role: m.role, contentEl: div });
+        }
+        return extracted;
+      }
+    }
+  } catch (e) {
+    console.warn('Failed to parse share page JSON payload:', e);
+  }
+
+  return extracted;
+}
+
+// Extract Perplexity queries, answers, search sources, and tables
+function extractPerplexityMessages() {
+  const extracted = [];
+  
+  const allCandidates = Array.from(document.querySelectorAll(
+    '[data-testid*="query" i], [data-testid*="answer" i], [class*="query" i], [class*="answer" i], ' +
+    '[class*="prose" i], .default.font-sans, h1.text-textMain, div[class*="Query" i], div[class*="Answer" i]'
+  )).filter(el => {
+    if (el.closest('form, footer, [class*="composer" i], [class*="toolbar" i], nav, header')) return false;
+    if (el.querySelector('textarea, input[type="text"]:not([readonly])')) return false;
+    return true;
+  });
+
+  const uniqueTurns = getUniqueElements(allCandidates);
+  for (let i = 0; i < uniqueTurns.length; i++) {
+    const turn = uniqueTurns[i];
+    const role = classifyTurnRole(turn, i, uniqueTurns.length);
+    extracted.push({ role, contentEl: turn });
+  }
+
+  return extracted;
+}
+
+// Adaptive Thread & Turn Discovery across any AI chat interface
+function extractAdaptiveTurns(root = document.body) {
+  const isComposerOrNav = (el) => {
+    if (!el) return true;
+    if (el.closest && el.closest('form, footer, nav, header, [data-testid*="composer" i], [data-testid*="prompt-box" i], [class*="composer" i], [class*="toolbar" i]')) {
+      return true;
+    }
+    if (el.querySelector && el.querySelector('textarea, input[type="text"]:not([readonly]), [contenteditable="true"]')) {
+      return true;
+    }
+    return false;
+  };
+
+  const candidateSelectors = [
+    'article',
+    'user-query',
+    'model-response',
+    '[data-message-id]',
+    '[data-message-author-role]',
+    '[data-testid*="message" i]',
+    '[data-testid*="turn" i]',
+    '[data-testid*="query" i]',
+    '[data-testid*="answer" i]',
+    '.user-message',
+    '.assistant-message',
+    '.claude-message',
+    '.font-user-message',
+    '.font-claude-message',
+    '.markdown',
+    '.prose',
+    'div[class*="message" i]',
+    'div[class*="chat-turn" i]',
+    'div[class*="bubble" i]',
+    'div[class*="row" i]'
+  ];
+
+  const rawCandidates = Array.from(root.querySelectorAll(candidateSelectors.join(', ')))
+    .filter(el => !isComposerOrNav(el));
+
+  const uniqueTurns = getUniqueElements(rawCandidates).filter(el => {
+    if (isComposerOrNav(el)) return false;
+    const text = el.textContent.trim();
+    const hasMedia = el.querySelector('img, canvas, svg, iframe');
+    return text.length > 0 || hasMedia !== null;
+  });
+
+  const extracted = [];
+  for (let i = 0; i < uniqueTurns.length; i++) {
+    const turn = uniqueTurns[i];
+    const role = classifyTurnRole(turn, i, uniqueTurns.length);
+    extracted.push({ role, contentEl: turn });
+  }
+
+  return extracted;
+}
+
+// Scrape chat messages by platform with self-adapting DOM change detection
 async function getChatMessages(platform) {
   const messages = [];
   const url = window.location.href;
 
   await captureCrossoriginIframes();
 
+  let extractedTurns = [];
+
   if (platform === 'ChatGPT' || url.includes('chatgpt.com') || url.includes('chat.openai.com')) {
+    const isSharePage = url.includes('/share/');
+    
+    // Standard in-session ChatGPT extraction
     const articles = document.querySelectorAll('article');
-    for (const article of articles) {
+    for (let i = 0; i < articles.length; i++) {
+      const article = articles[i];
       const isUser = article.querySelector('[data-message-author-role="user"]') !== null;
       const isAssistant = article.querySelector('[data-message-author-role="assistant"]') !== null;
       
@@ -932,21 +1273,25 @@ async function getChatMessages(platform) {
 
       if (isUser) {
         role = 'user';
-        contentEl = article.querySelector('[data-message-author-role="user"]') || article.querySelector('.whitespace-pre-wrap');
+        contentEl = article.querySelector('[data-message-author-role="user"]') || article.querySelector('.whitespace-pre-wrap') || article;
       } else if (isAssistant) {
         role = 'assistant';
-        contentEl = article.querySelector('.markdown') || article.querySelector('[data-message-author-role="assistant"]');
+        contentEl = article.querySelector('[data-message-author-role="assistant"]') || article.querySelector('.markdown') || article;
+      } else {
+        role = classifyTurnRole(article, i, articles.length);
+        contentEl = article.querySelector('[data-message-author-role="assistant"]') || article.querySelector('[data-message-author-role="user"]') || article.querySelector('.markdown') || article;
       }
 
       if (role && contentEl) {
-        const clone = deepCloneWithShadowsAndSvgs(contentEl);
-        cleanNoise(clone);
-        await processImages(clone);
-        messages.push({ role, html: clone.innerHTML });
+        extractedTurns.push({ role, contentEl });
       }
     }
+
+    // If standard articles yielded nothing (e.g. /share/... page or React UI update), run share-page / adaptive extractor
+    if (extractedTurns.length === 0 && (isSharePage || articles.length === 0)) {
+      extractedTurns = extractChatGPTShareMessages();
+    }
   } else if (platform === 'Claude' || url.includes('claude.ai')) {
-    // Ultra-robust Claude selector matching all typical message container variations
     const rawElements = document.querySelectorAll(
       '.font-user-message, .font-claude-message, [data-testid="user-message"], [data-testid="assistant-message"], ' +
       'div[class*="font-user"], div[class*="font-claude"], div[class*="user-message"], div[class*="claude-message"], ' +
@@ -954,27 +1299,10 @@ async function getChatMessages(platform) {
     );
     const turns = getUniqueElements(rawElements);
 
-    for (const turn of turns) {
-      let role = null;
-      const className = turn.className && typeof turn.className === 'string' ? turn.className : '';
-      const testId = turn.getAttribute('data-testid') || '';
-
-      // Check if it belongs to User
-      if (
-        className.includes('user') || 
-        testId.includes('user') || 
-        turn.querySelector('.font-user-message') ||
-        turn.closest('.font-user-message')
-      ) {
-        role = 'user';
-      } else {
-        role = 'assistant';
-      }
-
-      const clone = deepCloneWithShadowsAndSvgs(turn);
-      cleanNoise(clone);
-      await processImages(clone);
-      messages.push({ role, html: clone.innerHTML });
+    for (let i = 0; i < turns.length; i++) {
+      const turn = turns[i];
+      const role = classifyTurnRole(turn, i, turns.length);
+      extractedTurns.push({ role, contentEl: turn });
     }
   } else if (platform === 'Gemini' || url.includes('gemini.google.com')) {
     const rawElements = document.querySelectorAll(
@@ -983,7 +1311,8 @@ async function getChatMessages(platform) {
     );
     const elements = getUniqueElements(rawElements);
 
-    for (const el of elements) {
+    for (let i = 0; i < elements.length; i++) {
+      const el = elements[i];
       let role = null;
       let contentEl = el;
       const tagName = el.tagName.toLowerCase();
@@ -997,16 +1326,14 @@ async function getChatMessages(platform) {
         contentEl = el.querySelector('.message-content') || el;
       }
 
-      const clone = deepCloneWithShadowsAndSvgs(contentEl);
-      cleanNoise(clone);
-      await processImages(clone);
-      messages.push({ role, html: clone.innerHTML });
+      extractedTurns.push({ role, contentEl });
     }
+  } else if (platform === 'Perplexity' || url.includes('perplexity.ai')) {
+    extractedTurns = extractPerplexityMessages();
   } else if (platform === 'Rovo' || url.includes('atlassian.net') || url.includes('atlassian.com')) {
-    // Rovo / Atlassian AI Assistant Scraper
     const isComposerOrToolbar = (el) => {
       if (!el) return false;
-      if (el.closest && el.closest('form, footer, [data-testid*="composer" i], [data-testid*="prompt-box" i], [data-testid*="prompt-input" i], [class*="Composer" i], [class*="composer" i], [class*="PromptBar" i], [class*="prompt-bar" i], [class*="Toolbar" i], [class*="toolbar" i], [class*="prompt-input" i]')) {
+      if (el.closest && el.closest('form, footer, [data-testid*="composer" i], [data-testid*="prompt-box" i], [data-testid*="prompt-input" i], [class*="Composer" i]:not([class*="--composer" i]), [class*="composer" i]:not([class*="--composer" i]), [class*="PromptBar" i], [class*="prompt-bar" i], [class*="Toolbar" i], [class*="toolbar" i], [class*="prompt-input" i]')) {
         return true;
       }
       if (el.querySelector && el.querySelector('textarea, input[type="text"], [contenteditable="true"]')) {
@@ -1033,114 +1360,8 @@ async function getChatMessages(platform) {
       const turn = turns[i];
       if (isComposerOrToolbar(turn)) continue;
 
-      let role = null;
-      const className = turn.className && typeof turn.className === 'string' ? turn.className.toLowerCase() : '';
-      const testId = (turn.getAttribute('data-testid') || '').toLowerCase();
-      
-      let styleBg = '';
-      try {
-        styleBg = window.getComputedStyle(turn).backgroundColor || '';
-      } catch (e) {}
-
-      const isBlue = (bg) => {
-        if (!bg || bg === 'transparent' || bg === 'rgba(0, 0, 0, 0)') return false;
-        const match = bg.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
-        if (match) {
-          const r = parseInt(match[1], 10);
-          const g = parseInt(match[2], 10);
-          const b = parseInt(match[3], 10);
-          return b > 160 && b > r + 30 && b > g + 20;
-        }
-        return false;
-      };
-
-      const isWhiteText = (col) => {
-        if (!col) return false;
-        const match = col.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
-        if (match) {
-          const r = parseInt(match[1], 10);
-          const g = parseInt(match[2], 10);
-          const b = parseInt(match[3], 10);
-          return r > 230 && g > 230 && b > 230;
-        }
-        return false;
-      };
-
-      let elBg = '';
-      let elColor = '';
-      try {
-        const cs = window.getComputedStyle(turn);
-        elBg = cs.backgroundColor || '';
-        elColor = cs.color || '';
-      } catch (e) {}
-
-      let hasBlueContainer = isBlue(styleBg) || isBlue(elBg);
-      if (!hasBlueContainer) {
-        const allDescendants = Array.from(turn.querySelectorAll('*'));
-        hasBlueContainer = allDescendants.some(desc => {
-          try {
-            const cs = window.getComputedStyle(desc);
-            return isBlue(cs.backgroundColor);
-          } catch(e) { return false; }
-        });
-      }
-
-      const hasWhiteTextContent = isWhiteText(elColor) && turn.textContent.trim().length > 0;
-
-      if (
-        className.includes('user') || 
-        testId.includes('user') || 
-        hasBlueContainer ||
-        hasWhiteTextContent ||
-        turn.querySelector('[style*="rgb(12, 102, 228)"], [style*="rgb(0, 82, 204)"], [style*="rgb(0, 101, 255)"], [class*="user" i]')
-      ) {
-        role = 'user';
-      } else if (
-        className.includes('agent') || 
-        className.includes('assistant') || 
-        className.includes('rovo') || 
-        className.includes('bot') || 
-        className.includes('response') || 
-        testId.includes('agent') || 
-        testId.includes('assistant') || 
-        testId.includes('rovo') || 
-        testId.includes('response') || 
-        turn.querySelector('.ak-renderer-document, [data-node-type="doc"]')
-      ) {
-        role = 'assistant';
-      }
-
-      if (!role) {
-        if (className.includes('sent') || className.includes('query')) {
-          role = 'user';
-        } else {
-          role = 'assistant';
-        }
-      }
-
-      const clone = deepCloneWithShadowsAndSvgs(turn);
-
-      // Check if subsequent element in turns list is an associated attachment card
-      if (role === 'user' && i + 1 < turns.length) {
-        const nextEl = turns[i + 1];
-        const isNextMediaCard = nextEl.matches && nextEl.matches(
-          '[data-testid*="media" i], [data-testid*="file" i], [data-testid*="attachment" i], [class*="media-card" i], [class*="file-card" i], [class*="attachment" i]'
-        );
-        if (isNextMediaCard) {
-          const cardClone = deepCloneWithShadowsAndSvgs(nextEl);
-          clone.appendChild(cardClone);
-          i++; // Skip the media card turn since it's merged into this user prompt
-        }
-      }
-
-      cleanNoise(clone);
-      await processImages(clone);
-
-      const textContent = clone.textContent.trim();
-      const hasMedia = clone.querySelector('img, canvas');
-      if (textContent || hasMedia) {
-        messages.push({ role, html: clone.innerHTML });
-      }
+      const role = classifyTurnRole(turn, i, turns.length);
+      extractedTurns.push({ role, contentEl: turn });
     }
   } else if (platform === 'Grok' || url.includes('grok.com') || url.includes('x.com')) {
     const rawElements = document.querySelectorAll(
@@ -1148,48 +1369,44 @@ async function getChatMessages(platform) {
     );
     const messageContainers = getUniqueElements(rawElements);
 
-    for (const el of messageContainers) {
-      let role = null;
-      const className = el.className && typeof el.className === 'string' ? el.className.toLowerCase() : '';
-
-      if (className.includes('user') || className.includes('sent') || el.querySelector('[class*="user" i]')) {
-        role = 'user';
-      } else if (className.includes('assistant') || className.includes('grok') || className.includes('bot') || className.includes('received')) {
-        role = 'assistant';
-      }
-
-      if (role) {
-        const clone = deepCloneWithShadowsAndSvgs(el);
-        cleanNoise(clone);
-        await processImages(clone);
-        messages.push({ role, html: clone.innerHTML });
-      }
+    for (let i = 0; i < messageContainers.length; i++) {
+      const el = messageContainers[i];
+      const role = classifyTurnRole(el, i, messageContainers.length);
+      extractedTurns.push({ role, contentEl: el });
     }
   }
 
-  // Final Heuristic Fallback in case platform parsing failed completely
-  if (messages.length === 0) {
-    console.log('No messages found with primary platform selectors. Using generic fallback...');
-    const rawElements = document.querySelectorAll('[class*="message" i], [class*="chat-turn" i], [class*="bubble" i], [data-testid*="message" i]');
-    const chatEls = getUniqueElements(rawElements).filter(el => {
-      if (el.closest('form, footer, [data-testid*="composer" i], [class*="composer" i], [class*="toolbar" i]')) return false;
-      if (el.querySelector('textarea, [contenteditable="true"]')) return false;
-      return true;
-    });
+  // Universal Adaptive Fallback in case platform parsing failed completely
+  if (extractedTurns.length === 0) {
+    console.log('No messages found with primary platform selectors. Using adaptive turn discovery engine...');
+    extractedTurns = extractAdaptiveTurns(document.body);
+  }
 
-    for (const el of chatEls) {
-      let role = 'assistant';
-      const className = el.className && typeof el.className === 'string' ? el.className.toLowerCase() : '';
-      if (className.includes('user') || className.includes('sent') || className.includes('query')) {
-        role = 'user';
-      }
+  // Process extracted turns: clone, clean UI noise, serialize images & canvases
+  for (let i = 0; i < extractedTurns.length; i++) {
+    const { role, contentEl } = extractedTurns[i];
+    if (!contentEl) continue;
 
-      const clone = deepCloneWithShadowsAndSvgs(el);
-      cleanNoise(clone);
-      await processImages(clone);
-      if (clone.textContent.trim() || clone.querySelector('img, canvas')) {
-        messages.push({ role, html: clone.innerHTML });
+    const clone = deepCloneWithShadowsAndSvgs(contentEl);
+
+    // Merge associated subsequent media attachment cards on Atlassian Rovo
+    if (role === 'user' && i + 1 < extractedTurns.length && (platform === 'Rovo' || url.includes('atlassian'))) {
+      const nextTurn = extractedTurns[i + 1];
+      const nextEl = nextTurn ? nextTurn.contentEl : null;
+      if (nextEl && nextEl.matches && nextEl.matches('[data-testid*="media" i], [data-testid*="file" i], [data-testid*="attachment" i], [class*="media-card" i], [class*="file-card" i], [class*="attachment" i]')) {
+        const cardClone = deepCloneWithShadowsAndSvgs(nextEl);
+        clone.appendChild(cardClone);
+        i++;
       }
+    }
+
+    cleanNoise(clone);
+    await processImages(clone);
+
+    const textContent = clone.textContent.trim();
+    const hasMedia = clone.querySelector('img, canvas, svg, iframe, table');
+    if (textContent || hasMedia) {
+      messages.push({ role, html: clone.innerHTML });
     }
   }
 
