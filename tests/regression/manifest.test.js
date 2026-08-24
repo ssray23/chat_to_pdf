@@ -24,7 +24,7 @@ describe('Manifest V3 Schema & Permissions Regression Suite', () => {
     expect(manifest).toBeDefined();
     expect(manifest.manifest_version).toBe(3);
     expect(manifest.name).toBe('AI Chat PDF Exporter');
-    expect(manifest.version).toBeDefined();
+    expect(manifest.version).toBe('1.2.0');
   });
 
   test('must specify required permissions (storage, activeTab, scripting)', () => {
@@ -34,12 +34,13 @@ describe('Manifest V3 Schema & Permissions Regression Suite', () => {
     });
   });
 
-  test('must include host permissions for Claude, ChatGPT, Gemini, Grok, and Rovo', () => {
+  test('must include host permissions for Claude, ChatGPT, Gemini, Perplexity, Grok, and Rovo', () => {
     const expectedHosts = [
       'https://chatgpt.com/*',
       'https://claude.ai/*',
       'https://gemini.google.com/*',
       'https://grok.com/*',
+      'https://*.perplexity.ai/*',
       'https://*.atlassian.net/*'
     ];
     expectedHosts.forEach(host => {

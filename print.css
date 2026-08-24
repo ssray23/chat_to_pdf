@@ -82,9 +82,13 @@ html, body, #write {
 }
 
 #write .atlassian-issues-summary-chip,
-#write .atlassian-sources-pill {
-    background-color: #ffffff !important;
-    background: #ffffff !important;
+#write .atlassian-sources-pill,
+#write .perplexity-sources-grid,
+#write .perplexity-source-chip,
+#write [class*="source-card" i],
+#write [class*="citation" i] {
+    background-color: #f8f9fa !important;
+    background: #f8f9fa !important;
 }
 
 #write .user-prompt-card,
@@ -123,6 +127,7 @@ html, body, #write {
 #write .ak-code-block {
     background-color: #f8f8f8 !important;
     background: #f8f8f8 !important;
+    color: #172b4d !important;
     border: 1px solid #e0e0e0 !important;
     border-radius: 10px !important;
     padding: 0.8rem 1rem !important;
@@ -131,6 +136,33 @@ html, body, #write {
     white-space: pre-wrap !important;
     word-wrap: break-word !important;
     overflow-x: hidden !important;
+}
+
+#write pre:empty,
+#write pre.md-fences:empty,
+#write code-block:empty,
+#write [class*="code-block" i]:empty,
+#write [class*="code-snippet" i]:empty,
+#write [data-node-type="codeBlock" i]:empty,
+#write .ak-code-block:empty {
+    display: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    border: none !important;
+}
+
+#write pre *,
+#write pre code,
+#write pre span,
+#write code,
+#write code span,
+#write code-block *,
+#write [class*="code-block" i] *,
+#write [class*="code-snippet" i] *,
+#write [data-node-type="codeBlock" i] *,
+#write .ak-code-block * {
+    color: #172b4d !important;
+    font-family: 'JetBrains Mono', Menlo, Monaco, Consolas, 'Courier New', monospace !important;
 }
 
 /* Reset all nested child elements inside a code block container to eliminate duplicate nested borders, boxes & backgrounds */
@@ -388,13 +420,32 @@ html, body, #write {
     page-break-inside: avoid;
 }
 
-/* Ensure images fit page width and break clean */
-#write img {
+/* Hide search citation favicons / link logos (Reddit, Apple, etc.) */
+#write a img,
+#write a svg,
+#write [class*="citation" i] img,
+#write [class*="citation" i] svg,
+#write [class*="source" i] img,
+#write [class*="source" i] svg,
+#write [class*="attribution" i] img,
+#write [class*="attribution" i] svg,
+#write [data-testid*="source" i] img,
+#write [data-testid*="source" i] svg,
+#write img[alt*="reddit" i],
+#write img[alt*="apple" i],
+#write img[src*="favicon" i],
+#write img[width="16"],
+#write img[width="32"] {
+    display: none !important;
+}
+
+/* Ensure document images fit page width and break clean */
+#write img:not(a img) {
     max-width: 100%;
     height: auto;
     border-radius: 6px;
     display: block;
-    margin: 1rem 0;
+    margin: 1rem auto;
     page-break-inside: avoid;
 }
 
@@ -691,7 +742,35 @@ html, body, #write {
     #write .ak-code-block {
         background-color: #f8f8f8 !important;
         background: #f8f8f8 !important;
+        color: #172b4d !important;
         border: 1px solid #e0e0e0 !important;
+    }
+
+    #write pre:empty,
+    #write pre.md-fences:empty,
+    #write code-block:empty,
+    #write [class*="code-block" i]:empty,
+    #write [class*="code-snippet" i]:empty,
+    #write [data-node-type="codeBlock" i]:empty,
+    #write .ak-code-block:empty {
+        display: none !important;
+        padding: 0 !important;
+        margin: 0 !important;
+        border: none !important;
+    }
+
+    #write pre *,
+    #write pre code,
+    #write pre span,
+    #write code,
+    #write code span,
+    #write code-block *,
+    #write [class*="code-block" i] *,
+    #write [class*="code-snippet" i] *,
+    #write [data-node-type="codeBlock" i] *,
+    #write .ak-code-block * {
+        color: #172b4d !important;
+        font-family: 'JetBrains Mono', Menlo, Monaco, Consolas, 'Courier New', monospace !important;
     }
 
     /* Reset nested inner containers & elements in print mode */

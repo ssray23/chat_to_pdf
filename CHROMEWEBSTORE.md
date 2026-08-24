@@ -1,6 +1,6 @@
 # Chrome Web Store Listing — AI Chat PDF Exporter
 
-> Last Updated: 2026-07-08
+> Last Updated: 2026-08-24
 
 ## Store Listing
 
@@ -8,13 +8,14 @@
 AI Chat PDF Exporter
 
 **Short Description**
-Export conversations from Claude, ChatGPT, Gemini, Grok, and Atlassian Rovo into beautifully styled, print-ready PDF files with white backgrounds.
+Export conversations from Claude, ChatGPT, Gemini, Perplexity, Grok, and Atlassian Rovo into beautifully styled, print-ready PDF files with white backgrounds.
 
 **Detailed Description**
-Save your AI conversations exactly as they look online but optimized for printing. AI Chat PDF Exporter reads conversation threads from major AI platforms (including Claude, ChatGPT, Gemini, Grok, and Atlassian Rovo) and formats them into neat multi-page PDFs using a premium clean CSS design.
+Save your AI conversations exactly as they look online but optimized for printing. AI Chat PDF Exporter reads conversation threads from major AI platforms (including Claude, ChatGPT including shared links, Gemini, Perplexity, Grok, and Atlassian Rovo) and formats them into neat multi-page PDFs using a premium clean CSS design.
 
 Key Features:
-- Preserves all conversation elements: text formatting, mathematical formulas (LaTeX/KaTeX), code blocks, images, and charts/canvases.
+- Preserves all conversation elements: text formatting, mathematical formulas (LaTeX/KaTeX), code blocks, images, tables, and charts/canvases.
+- Universal self-adapting DOM engine faithfully identifies conversation turns, visuals, and rich elements even across site updates.
 - Renders in Helvetica font for high readability.
 - Re-formats tables with rounded corners and alternating zebra-row shading for a clean grid layout.
 - Strictly forces a white background on all page sections to optimize for printing and ink usage.
@@ -62,6 +63,8 @@ English
 | `https://gemini.google.com/*` | host_permissions | Scrapes and processes conversation turns, images, and formulas on Gemini. |
 | `https://grok.com/*` | host_permissions | Scrapes and processes conversation turns, images, and formulas on Grok. |
 | `https://x.com/*` | host_permissions | Scrapes and processes Grok conversation turns on Twitter/X. |
+| `https://*.perplexity.ai/*` | host_permissions | Scrapes and processes query and answer turns, sources, tables, and charts on Perplexity. |
+| `https://perplexity.ai/*` | host_permissions | Scrapes and processes query and answer turns, sources, tables, and charts on Perplexity. |
 | `https://*.atlassian.net/*` | host_permissions | Scrapes and processes conversation turns, images, and formulas on Atlassian Rovo. |
 | `https://*.atlassian.com/*` | host_permissions | Scrapes and processes conversation turns, images, and formulas on Atlassian Rovo (Admin portals). |
 
@@ -99,7 +102,8 @@ developer@aiexporter.local
 
 | Version | Date | Changes | Status |
 |---------|------|---------|--------|
-| 1.1.0 | 2026-07-08 | Added support for Atlassian Rovo, improved generic code block rendering, and fixed empty bullet artifacts. | Draft |
+| 1.2.0 | 2026-08-24 | Universal self-adapting DOM change detector & turn classifier, Perplexity support, and ChatGPT public /share/ extraction. | Draft |
+| 1.1.0 | 2026-07-08 | Added support for Atlassian Rovo, improved generic code block rendering, and fixed empty bullet artifacts. | Published |
 | 1.0.0 | 2026-06-27 | Initial release. Supported platforms: ChatGPT, Claude, Gemini, Grok. | Published |
 
 ## Review Notes

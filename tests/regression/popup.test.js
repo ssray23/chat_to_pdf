@@ -64,6 +64,12 @@ describe('Popup Platform Auto-Detection & Messaging Regression Suite', () => {
     expect(document.getElementById('btn-export').disabled).toBe(false);
   });
 
+  test('auto-detects Perplexity platform from active tab URL', async () => {
+    await runPopupScriptWithMockTab('https://www.perplexity.ai/search/what-is-ai');
+    expect(document.getElementById('status-title').textContent).toContain('Perplexity Chat Detected');
+    expect(document.getElementById('btn-export').disabled).toBe(false);
+  });
+
   test('shows error when tab is unsupported URL', async () => {
     await runPopupScriptWithMockTab('https://example.com');
     expect(document.getElementById('status-title').textContent).toBe('Not Supported');

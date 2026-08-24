@@ -60,6 +60,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       platform = 'Claude';
     } else if (url.includes('gemini.google.com')) {
       platform = 'Gemini';
+    } else if (url.includes('perplexity.ai')) {
+      platform = 'Perplexity';
     } else if (url.includes('grok.com') || url.includes('x.com/i/grok')) {
       platform = 'Grok';
     } else if (url.includes('atlassian.net') || url.includes('atlassian.com')) {
@@ -69,7 +71,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (platform) {
       updateStatus('detected', `${platform} Chat Detected`, `Ready to export the conversation on this tab.`);
     } else {
-      updateStatus('error', 'Not Supported', 'Please open a conversation on Claude, ChatGPT, Gemini, Grok, or Rovo.');
+      updateStatus('error', 'Not Supported', 'Please open a conversation on Claude, ChatGPT, Gemini, Perplexity, Grok, or Rovo.');
     }
   } catch (err) {
     console.error(err);
