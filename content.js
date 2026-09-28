@@ -1498,6 +1498,10 @@ async function getChatMessages(platform) {
       }
     }
 
+    if (platform === 'Rovo' || url.includes('atlassian')) {
+      normalizeSmartLinksAndLists(clone);
+    }
+
     cleanNoise(clone);
     await processImages(clone);
 
