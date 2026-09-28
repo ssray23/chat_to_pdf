@@ -428,6 +428,13 @@ function cleanNoise(clone) {
     } catch (e) {}
   });
 
+  // 1b. Remove code-block line-number gutters (e.g. Atlaskit code blocks with line numbers)
+  clone.querySelectorAll('[class*="linenumber" i], [class*="line-number" i], [class*="gutter" i], [data-testid*="line-number" i]').forEach(el => {
+    if (/^\s*\d+\s*$/.test(el.textContent)) {
+      el.remove();
+    }
+  });
+
   // 2. Remove action buttons, but PRESERVE:
   //    a) Interactive media cards / image attachments
   //    b) Suggested follow-up prompt buttons (e.g. "↳ Read the full Confluence page...")
@@ -1023,15 +1030,70 @@ function hasUserBubbleStyle(el) {
         const r = parseInt(match[1], 10);
         const g = parseInt(match[2], 10);
         const b = parseInt(match[3], 10);
-        // Blue bubble
-        if (b > 160 && b > r + 25 && b > g + 20) return true;
+        // Blue bubble: primary Atlaskit #0c66e4 is rgb(12, 102, 228), #0052cc is rgb(0, 82, 204), #0065ff is rgb(0, 101, 255)
+        if (b > 130 && b > r + 15 && b > g + 15) return true;
         // Dark gray/charcoal bubble in light mode or distinct pill in dark mode
         if (r === g && g === b && (r < 60 || (r > 220 && r < 250))) return true;
       }
     }
     const radius = parseFloat(cs.borderRadius) || 0;
-    if (radius >= 12 && cs.display !== 'inline') return true;
+    if (radius >= 10 && cs.display !== 'inline' && bg && bg !== 'transparent' && bg !== 'rgba(0, 0, 0, 0)') return true;
   } catch (e) {}
+  return false;
+}
+
+// Determines if a message node represents a user turn (prompt)
+function isUserTurn(el) {
+  if (!el) return false;
+
+  // 1. Explicit author role attributes
+  const authorRole = (el.getAttribute('data-message-author-role') || el.getAttribute('data-role') || el.getAttribute('role') || '').toLowerCase();
+  if (authorRole === 'user' || authorRole === 'human') return true;
+  if (authorRole === 'assistant' || authorRole === 'agent' || authorRole === 'model' || authorRole === 'bot') return false;
+
+  const tagName = el.tagName ? el.tagName.toLowerCase() : '';
+  if (tagName === 'user-query') return true;
+  if (tagName === 'model-response') return false;
+
+  if (el.querySelector && el.querySelector('[data-message-author-role="user"]')) return true;
+  if (el.querySelector && el.querySelector('[data-message-author-role="assistant"]')) return false;
+
+  // 2. Explicit User testid or class markers (excluding parent message containers that also match 'assistant' or 'agent' or 'rovo')
+  const testId = (el.getAttribute('data-testid') || '').toLowerCase();
+  const className = el.className && typeof el.className === 'string' ? el.className.toLowerCase() : '';
+
+  const isExplicitAssistant = /\b(assistant|agent|rovo|model|bot|model-response)\b/i.test(testId) || 
+                              /\b(assistant-message|agent-message|rovo-message|claude-message)\b/i.test(className);
+
+  if (!isExplicitAssistant) {
+    if (/\b(user-message|font-user|user_message|user-query)\b/i.test(testId) || /\b(user-message|font-user|usermessage)\b/i.test(className)) {
+      return true;
+    }
+    if (el.querySelector && el.querySelector('[data-testid*="user-message" i], [class*="UserMessage" i], [class*="user-message" i]')) {
+      return true;
+    }
+  }
+
+  // 3. User bubble styling (Blue bubble / dark pill on el or any child)
+  if (hasUserBubbleStyle(el)) return true;
+  if (el.querySelectorAll) {
+    const bubbles = el.querySelectorAll('div, section, p, span');
+    for (let i = 0; i < Math.min(bubbles.length, 15); i++) {
+      if (hasUserBubbleStyle(bubbles[i])) return true;
+    }
+  }
+
+  // 4. Layout alignment (right-aligned user bubbles)
+  try {
+    const cs = window.getComputedStyle(el);
+    if (cs.marginLeft === 'auto' || cs.justifyContent === 'flex-end' || cs.alignSelf === 'flex-end' || cs.textAlign === 'right') {
+      return true;
+    }
+    if (className.includes('self-end') || className.includes('items-end') || className.includes('justify-end')) {
+      return true;
+    }
+  } catch (e) {}
+
   return false;
 }
 
@@ -1039,70 +1101,41 @@ function hasUserBubbleStyle(el) {
 function classifyTurnRole(el, index = 0, totalTurns = 1) {
   if (!el) return 'assistant';
   
-  let score = 0; // Positive => User, Negative => Assistant
-  const tagName = el.tagName ? el.tagName.toLowerCase() : '';
-  const className = el.className && typeof el.className === 'string' ? el.className.toLowerCase() : '';
-  const testId = (el.getAttribute('data-testid') || '').toLowerCase();
-  const authorRole = (el.getAttribute('data-message-author-role') || el.getAttribute('data-role') || el.getAttribute('role') || '').toLowerCase();
-  
-  // 1. Explicit semantic attributes (Highest weight: +/- 15)
-  if (authorRole === 'user' || authorRole === 'human') return 'user';
-  if (authorRole === 'assistant' || authorRole === 'agent' || authorRole === 'model' || authorRole === 'bot') return 'assistant';
-  if (tagName === 'user-query') return 'user';
-  if (tagName === 'model-response') return 'assistant';
-  if (el.querySelector('[data-message-author-role="user"]')) return 'user';
-  if (el.querySelector('[data-message-author-role="assistant"]')) return 'assistant';
-  if (el.classList.contains('ak-renderer-document') || el.querySelector('.ak-renderer-document')) return 'assistant';
+  // 1. Prioritize user turn detection
+  if (isUserTurn(el)) return 'user';
 
-  // 2. Class & TestID semantic markers (+/- 6)
-  if (/\b(user|human|query|prompt|sent|user-message)\b/.test(className) || /\b(user|human|query|prompt)\b/.test(testId)) {
-    score += 6;
+  // 2. Assistant semantic signals
+  const authorRole = (el.getAttribute('data-message-author-role') || el.getAttribute('data-role') || el.getAttribute('role') || '').toLowerCase();
+  if (authorRole === 'assistant' || authorRole === 'agent' || authorRole === 'model' || authorRole === 'bot') return 'assistant';
+
+  const tagName = el.tagName ? el.tagName.toLowerCase() : '';
+  if (tagName === 'model-response') return 'assistant';
+
+  const testId = (el.getAttribute('data-testid') || '').toLowerCase();
+  const className = el.className && typeof el.className === 'string' ? el.className.toLowerCase() : '';
+
+  if (/\b(assistant|agent|model|response|bot|answer|claude-message|rovo|prose)\b/.test(className) || /\b(assistant|agent|model|response|bot|answer|rovo)\b/.test(testId)) {
+    return 'assistant';
   }
-  if (/\b(assistant|agent|model|response|bot|answer|claude-message|rovo|prose)\b/.test(className) || /\b(assistant|agent|model|response|bot|answer)\b/.test(testId)) {
-    score -= 6;
+
+  if (el.classList.contains('ak-renderer-document') || (el.querySelector && el.querySelector('.ak-renderer-document'))) {
+    return 'assistant';
   }
 
   // 3. Rich Markdown / Assistant Content Fingerprint
-  const hasCodeBlock = el.querySelector('pre, code.hljs, [class*="code-block" i]') !== null;
-  const hasTable = el.querySelector('table') !== null;
-  const hasMath = el.querySelector('.katex, .MathJax, [data-math]') !== null;
-  const hasHeadings = el.querySelector('h1, h2, h3, h4, h5, h6') !== null;
-  const hasSources = el.querySelector('[data-testid*="source" i], [class*="source" i], [class*="citation" i]') !== null;
-  const hasMarkdown = el.querySelector('.markdown, .prose, [class*="markdown" i], [class*="prose" i]') !== null;
-  
-  if (hasMarkdown) score -= 4;
-  if (hasCodeBlock) score -= 4;
-  if (hasTable) score -= 4;
-  if (hasMath) score -= 3;
-  if (hasHeadings) score -= 2;
-  if (hasSources) score -= 3;
+  const hasCodeBlock = el.querySelector && el.querySelector('pre, code.hljs, [class*="code-block" i]') !== null;
+  const hasTable = el.querySelector && el.querySelector('table') !== null;
+  const hasMath = el.querySelector && el.querySelector('.katex, .MathJax, [data-math]') !== null;
+  const hasHeadings = el.querySelector && el.querySelector('h1, h2, h3, h4, h5, h6') !== null;
+  const hasSources = el.querySelector && el.querySelector('[data-testid*="source" i], [class*="source" i], [class*="citation" i]') !== null;
+  const hasMarkdown = el.querySelector && el.querySelector('.markdown, .prose, [class*="markdown" i], [class*="prose" i]') !== null;
 
-  // 4. Layout Geometry and Alignment (+/- 4)
-  try {
-    const cs = window.getComputedStyle(el);
-    if (cs.marginLeft === 'auto' || cs.justifyContent === 'flex-end' || cs.alignSelf === 'flex-end' || cs.textAlign === 'right') {
-      score += 4;
-    }
-    if (className.includes('self-end') || className.includes('items-end') || className.includes('justify-end')) {
-      score += 4;
-    }
-  } catch (e) {}
-
-  // 5. Visual Bubble Styling & Color Contrast
-  if (hasUserBubbleStyle(el) || el.querySelector('[style*="rgb(12, 102, 228)"], [style*="rgb(0, 82, 204)"], [style*="rgb(0, 101, 255)"]')) {
-    score += 4;
+  if (hasMarkdown || hasCodeBlock || hasTable || hasMath || hasHeadings || hasSources) {
+    return 'assistant';
   }
 
-  // 6. Tie-breaker via Alternating Rhythm Parity
-  if (score === 0) {
-    if (index % 2 === 0) {
-      score += 2;
-    } else {
-      score -= 2;
-    }
-  }
-
-  return score >= 0 ? 'user' : 'assistant';
+  // 4. Tie-breaker via alternating rhythm parity
+  return index % 2 === 0 ? 'user' : 'assistant';
 }
 
 // Extract ChatGPT /share/ public page content (DOM and SSR JSON payload fallback)
@@ -1296,41 +1329,72 @@ function findChatScrollContainer() {
   return best || document.scrollingElement || document.documentElement;
 }
 
-// Ensure any virtualized or lazy-loaded turns are loaded into the DOM before scraping
-async function ensureFullConversationLoaded(platform) {
-  try {
-    const scrollContainer = findChatScrollContainer();
-    if (!scrollContainer) return;
+// Universal collector for virtualized chat containers: sweeps the container to mount and capture all turns
+async function collectTurns(queryFn, platform) {
+  const scrollContainer = findChatScrollContainer();
+  const isDoc = !scrollContainer || scrollContainer === document.documentElement || scrollContainer === document.body;
+  
+  const initialScrollTop = isDoc ? window.scrollY : (scrollContainer ? scrollContainer.scrollTop : 0);
+  const clientHeight = scrollContainer && !isDoc ? scrollContainer.clientHeight : window.innerHeight;
 
-    const isDoc = scrollContainer === document.documentElement || scrollContainer === document.body;
-    let currentScroll = isDoc ? window.scrollY : scrollContainer.scrollTop;
+  const collected = [];
+  const seenFingerprints = new Set();
 
-    // If container is scrolled down, scroll up to trigger loading earlier messages
-    if (currentScroll > 40) {
-      let attempts = 0;
-      let prevHeight = scrollContainer.scrollHeight;
+  function recordVisibleTurns() {
+    const rawTurns = queryFn();
+    const unique = getUniqueElements(rawTurns);
+    for (let i = 0; i < unique.length; i++) {
+      const turn = unique[i];
+      const text = turn.textContent.trim();
+      const hasMedia = turn.querySelector('img, canvas, svg, iframe, table');
+      if (!text && !hasMedia) continue;
 
-      while (attempts < 15) {
-        if (isDoc) {
-          window.scrollTo({ top: 0, behavior: 'instant' });
-        } else {
-          scrollContainer.scrollTop = 0;
-        }
+      const role = classifyTurnRole(turn, i, unique.length);
+      // Stable fingerprint
+      const fp = role + '|' + text.slice(0, 100) + '|' + text.slice(-50) + '|' + text.length;
+      if (seenFingerprints.has(fp)) continue;
 
-        await new Promise(r => setTimeout(r, 220));
-
-        const newHeight = scrollContainer.scrollHeight;
-        const nowScroll = isDoc ? window.scrollY : scrollContainer.scrollTop;
-        if (newHeight === prevHeight && nowScroll <= 0) {
-          break;
-        }
-        prevHeight = newHeight;
-        attempts++;
-      }
+      seenFingerprints.add(fp);
+      // Clone immediately into memory so virtualization never loses offscreen content
+      const clone = deepCloneWithShadowsAndSvgs(turn);
+      collected.push({ role, clone, contentEl: turn });
     }
-  } catch (err) {
-    console.warn('Scroll pre-load non-fatal warning:', err);
   }
+
+  // If container is scrollable, scroll to top first to ensure earlier turns are loaded
+  if (scrollContainer && scrollContainer.scrollHeight > clientHeight + 50) {
+    if (isDoc) window.scrollTo({ top: 0, behavior: 'instant' });
+    else scrollContainer.scrollTop = 0;
+    await new Promise(r => setTimeout(r, 180));
+    recordVisibleTurns();
+
+    // Sweep downwards through the container in overlapping steps
+    let maxScroll = scrollContainer.scrollHeight - clientHeight;
+    let curr = 0;
+    const step = Math.max(350, Math.floor(clientHeight * 0.7));
+
+    while (curr < maxScroll) {
+      curr = Math.min(curr + step, maxScroll);
+      if (isDoc) window.scrollTo({ top: curr, behavior: 'instant' });
+      else scrollContainer.scrollTop = curr;
+
+      await new Promise(r => setTimeout(r, 80));
+      recordVisibleTurns();
+
+      // Recalculate maxScroll as new virtual items mount
+      maxScroll = scrollContainer.scrollHeight - clientHeight;
+      if (curr >= maxScroll) break;
+    }
+  } else {
+    // Single-screen container or non-scrollable
+    recordVisibleTurns();
+  }
+
+  // Restore initial scroll position
+  if (isDoc) window.scrollTo({ top: initialScrollTop, behavior: 'instant' });
+  else if (scrollContainer) scrollContainer.scrollTop = initialScrollTop;
+
+  return collected;
 }
 
 // Scrape chat messages by platform with self-adapting DOM change detection
@@ -1340,178 +1404,134 @@ async function getChatMessages(platform) {
   const savedScroll = saveScrollPositions();
 
   try {
-    await ensureFullConversationLoaded(platform);
+    // 1. Dispatch beforeprint event so React/Atlaskit/virtualizers mount all conversation turns
+    try {
+      window.dispatchEvent(new Event('beforeprint'));
+    } catch (e) {
+      console.warn('beforeprint dispatch non-fatal:', e);
+    }
+    await new Promise(r => setTimeout(r, 200));
+
+    // 2. Capture cross-origin iframes
     await captureCrossoriginIframes();
 
+    // 3. Define platform query function
+    let queryFn = null;
+
+    if (platform === 'ChatGPT' || url.includes('chatgpt.com') || url.includes('chat.openai.com')) {
+      const isSharePage = url.includes('/share/');
+      queryFn = () => {
+        const articles = document.querySelectorAll('article');
+        if (articles.length > 0) return Array.from(articles);
+        return [];
+      };
+    } else if (platform === 'Claude' || url.includes('claude.ai')) {
+      queryFn = () => Array.from(document.querySelectorAll(
+        '.font-user-message, .font-claude-message, [data-testid="user-message"], [data-testid="assistant-message"], ' +
+        'div[class*="font-user"], div[class*="font-claude"], div[class*="user-message"], div[class*="claude-message"], ' +
+        'div[class*="assistant-message"], .user-message, .claude-message'
+      ));
+    } else if (platform === 'Gemini' || url.includes('gemini.google.com')) {
+      queryFn = () => Array.from(document.querySelectorAll(
+        'user-query, model-response, .query-text-container, .model-response-container, ' +
+        'div[class*="query"], div[class*="response"], div[class*="message-content"]'
+      ));
+    } else if (platform === 'Perplexity' || url.includes('perplexity.ai')) {
+      queryFn = () => Array.from(document.querySelectorAll(
+        '[data-testid*="query" i], [data-testid*="answer" i], [class*="query" i], [class*="answer" i], ' +
+        '[class*="prose" i], .default.font-sans, h1.text-textMain, div[class*="Query" i], div[class*="Answer" i]'
+      )).filter(el => {
+        if (el.closest('form, footer, [class*="composer" i], [class*="toolbar" i], nav, header')) return false;
+        if (el.querySelector('textarea, input[type="text"]:not([readonly])')) return false;
+        return true;
+      });
+    } else if (platform === 'Rovo' || url.includes('atlassian.net') || url.includes('atlassian.com')) {
+      const isComposerOrToolbar = (el) => {
+        if (!el) return false;
+        if (el.closest && el.closest('form, footer, [data-testid*="composer" i], [data-testid*="prompt-box" i], [data-testid*="prompt-input" i], [class*="Composer" i]:not([class*="--composer" i]), [class*="composer" i]:not([class*="--composer" i]), [class*="PromptBar" i], [class*="prompt-bar" i], [class*="Toolbar" i], [class*="toolbar" i], [class*="prompt-input" i]')) {
+          return true;
+        }
+        if (el.querySelector && el.querySelector('textarea, input[type="text"], [contenteditable="true"]')) {
+          return true;
+        }
+        return false;
+      };
+
+      const rovoSelectors = [
+        '[data-testid="chat-message"]:not([data-testid*="list"]):not([data-testid*="scroll"])',
+        '[data-testid*="message-item" i]',
+        'div[class*="MessageRow" i]:not([class*="list" i]):not([class*="container" i])',
+        'div[class*="message-row" i]:not([class*="list" i]):not([class*="container" i])',
+        'div[class*="ChatMessage" i]:not([class*="list" i]):not([class*="container" i]):not([class*="wrapper" i])',
+        'div[class*="chat-message" i]:not([class*="list" i]):not([class*="container" i]):not([class*="wrapper" i])',
+        '[data-testid*="user-message" i]',
+        'div[class*="UserMessage" i]',
+        'div[class*="user-message" i]',
+        'div[class*="bubble" i]',
+        '.ak-renderer-document',
+        '[data-testid*="assistant-message" i]',
+        '[data-testid*="rovo-message" i]',
+        '[data-testid*="agent-message" i]',
+        'div[class*="AgentMessage" i]',
+        'div[class*="AssistantMessage" i]',
+        'div[class*="RovoMessage" i]',
+        'div[class*="agent-message" i]',
+        'div[class*="assistant-message" i]'
+      ].join(', ');
+
+      queryFn = () => Array.from(document.querySelectorAll(rovoSelectors)).filter(el => !isComposerOrToolbar(el));
+    } else if (platform === 'Grok' || url.includes('grok.com') || url.includes('x.com')) {
+      queryFn = () => Array.from(document.querySelectorAll(
+        'div[class*="message" i], div[class*="bubble" i], div[class*="chat-turn" i], div[data-testid*="message" i]'
+      ));
+    }
+
     let extractedTurns = [];
+    if (queryFn) {
+      extractedTurns = await collectTurns(queryFn, platform);
+    }
 
-  if (platform === 'ChatGPT' || url.includes('chatgpt.com') || url.includes('chat.openai.com')) {
-    const isSharePage = url.includes('/share/');
-    
-    // Standard in-session ChatGPT extraction
-    const articles = document.querySelectorAll('article');
-    for (let i = 0; i < articles.length; i++) {
-      const article = articles[i];
-      const isUser = article.querySelector('[data-message-author-role="user"]') !== null;
-      const isAssistant = article.querySelector('[data-message-author-role="assistant"]') !== null;
-      
-      let role = null;
-      let contentEl = null;
+    // Universal Adaptive Fallback in case platform parsing yielded nothing
+    if (extractedTurns.length === 0) {
+      console.log('No messages found with primary platform selectors. Using adaptive turn discovery engine...');
+      extractedTurns = await collectTurns(() => {
+        const adaptive = extractAdaptiveTurns(document.body);
+        return adaptive.map(t => t.contentEl);
+      }, platform);
+    }
 
-      if (isUser) {
-        role = 'user';
-        contentEl = article.querySelector('[data-message-author-role="user"]') || article.querySelector('.whitespace-pre-wrap') || article;
-      } else if (isAssistant) {
-        role = 'assistant';
-        contentEl = article.querySelector('[data-message-author-role="assistant"]') || article.querySelector('.markdown') || article;
-      } else {
-        role = classifyTurnRole(article, i, articles.length);
-        contentEl = article.querySelector('[data-message-author-role="assistant"]') || article.querySelector('[data-message-author-role="user"]') || article.querySelector('.markdown') || article;
+    // Process extracted turns: clone, clean UI noise, serialize images & canvases
+    for (let i = 0; i < extractedTurns.length; i++) {
+      const { role, clone, contentEl } = extractedTurns[i];
+      if (!clone) continue;
+
+      // Merge associated subsequent media attachment cards on Atlassian Rovo
+      if (role === 'user' && i + 1 < extractedTurns.length && (platform === 'Rovo' || url.includes('atlassian'))) {
+        const nextTurn = extractedTurns[i + 1];
+        const nextEl = nextTurn ? nextTurn.clone : null;
+        if (nextEl && nextEl.matches && nextEl.matches('[data-testid*="media" i], [data-testid*="file" i], [data-testid*="attachment" i], [class*="media-card" i], [class*="file-card" i], [class*="attachment" i]')) {
+          clone.appendChild(nextEl);
+          i++;
+        }
       }
 
-      if (role && contentEl) {
-        extractedTurns.push({ role, contentEl });
-      }
-    }
-
-    // If standard articles yielded nothing (e.g. /share/... page or React UI update), run share-page / adaptive extractor
-    if (extractedTurns.length === 0 && (isSharePage || articles.length === 0)) {
-      extractedTurns = extractChatGPTShareMessages();
-    }
-  } else if (platform === 'Claude' || url.includes('claude.ai')) {
-    const rawElements = document.querySelectorAll(
-      '.font-user-message, .font-claude-message, [data-testid="user-message"], [data-testid="assistant-message"], ' +
-      'div[class*="font-user"], div[class*="font-claude"], div[class*="user-message"], div[class*="claude-message"], ' +
-      'div[class*="assistant-message"], .user-message, .claude-message'
-    );
-    const turns = getUniqueElements(rawElements);
-
-    for (let i = 0; i < turns.length; i++) {
-      const turn = turns[i];
-      const role = classifyTurnRole(turn, i, turns.length);
-      extractedTurns.push({ role, contentEl: turn });
-    }
-  } else if (platform === 'Gemini' || url.includes('gemini.google.com')) {
-    const rawElements = document.querySelectorAll(
-      'user-query, model-response, .query-text-container, .model-response-container, ' +
-      'div[class*="query"], div[class*="response"], div[class*="message-content"]'
-    );
-    const elements = getUniqueElements(rawElements);
-
-    for (let i = 0; i < elements.length; i++) {
-      const el = elements[i];
-      let role = null;
-      let contentEl = el;
-      const tagName = el.tagName.toLowerCase();
-      const className = el.className && typeof el.className === 'string' ? el.className.toLowerCase() : '';
-
-      if (tagName === 'user-query' || className.includes('query')) {
-        role = 'user';
-        contentEl = el.querySelector('.query-text') || el;
-      } else {
-        role = 'assistant';
-        contentEl = el.querySelector('.message-content') || el;
+      if (platform === 'Rovo' || url.includes('atlassian')) {
+        normalizeSmartLinksAndLists(clone);
       }
 
-      extractedTurns.push({ role, contentEl });
-    }
-  } else if (platform === 'Perplexity' || url.includes('perplexity.ai')) {
-    extractedTurns = extractPerplexityMessages();
-  } else if (platform === 'Rovo' || url.includes('atlassian.net') || url.includes('atlassian.com')) {
-    const isComposerOrToolbar = (el) => {
-      if (!el) return false;
-      if (el.closest && el.closest('form, footer, [data-testid*="composer" i], [data-testid*="prompt-box" i], [data-testid*="prompt-input" i], [class*="Composer" i]:not([class*="--composer" i]), [class*="composer" i]:not([class*="--composer" i]), [class*="PromptBar" i], [class*="prompt-bar" i], [class*="Toolbar" i], [class*="toolbar" i], [class*="prompt-input" i]')) {
-        return true;
-      }
-      if (el.querySelector && el.querySelector('textarea, input[type="text"], [contenteditable="true"]')) {
-        return true;
-      }
-      return false;
-    };
+      cleanNoise(clone);
+      await processImages(clone);
 
-    const rovoSelectors = [
-      '[data-testid="chat-message"]:not([data-testid*="list"]):not([data-testid*="scroll"])',
-      '[data-testid*="message-item" i]',
-      'div[class*="MessageRow" i]',
-      'div[class*="message-row" i]',
-      'div[class*="ChatMessage" i]',
-      'div[class*="chat-message" i]',
-      '[data-testid*="user-message" i]',
-      'div[class*="UserMessage" i]',
-      'div[class*="user-message" i]',
-      'div[class*="bubble" i]',
-      '.ak-renderer-document',
-      '[data-testid*="assistant-message" i]',
-      '[data-testid*="rovo-message" i]',
-      '[data-testid*="agent-message" i]',
-      'div[class*="AgentMessage" i]',
-      'div[class*="AssistantMessage" i]',
-      'div[class*="RovoMessage" i]',
-      'div[class*="agent-message" i]',
-      'div[class*="assistant-message" i]'
-    ].join(', ');
-
-    let turns = Array.from(document.querySelectorAll(rovoSelectors)).filter(el => !isComposerOrToolbar(el));
-    turns = getUniqueElements(turns).filter(el => !isComposerOrToolbar(el));
-
-    for (let i = 0; i < turns.length; i++) {
-      const turn = turns[i];
-      if (isComposerOrToolbar(turn)) continue;
-
-      const role = classifyTurnRole(turn, i, turns.length);
-      extractedTurns.push({ role, contentEl: turn });
-    }
-  } else if (platform === 'Grok' || url.includes('grok.com') || url.includes('x.com')) {
-    const rawElements = document.querySelectorAll(
-      'div[class*="message" i], div[class*="bubble" i], div[class*="chat-turn" i], div[data-testid*="message" i]'
-    );
-    const messageContainers = getUniqueElements(rawElements);
-
-    for (let i = 0; i < messageContainers.length; i++) {
-      const el = messageContainers[i];
-      const role = classifyTurnRole(el, i, messageContainers.length);
-      extractedTurns.push({ role, contentEl: el });
-    }
-  }
-
-  // Universal Adaptive Fallback in case platform parsing failed completely
-  if (extractedTurns.length === 0) {
-    console.log('No messages found with primary platform selectors. Using adaptive turn discovery engine...');
-    extractedTurns = extractAdaptiveTurns(document.body);
-  }
-
-  // Process extracted turns: clone, clean UI noise, serialize images & canvases
-  for (let i = 0; i < extractedTurns.length; i++) {
-    const { role, contentEl } = extractedTurns[i];
-    if (!contentEl) continue;
-
-    const clone = deepCloneWithShadowsAndSvgs(contentEl);
-
-    // Merge associated subsequent media attachment cards on Atlassian Rovo
-    if (role === 'user' && i + 1 < extractedTurns.length && (platform === 'Rovo' || url.includes('atlassian'))) {
-      const nextTurn = extractedTurns[i + 1];
-      const nextEl = nextTurn ? nextTurn.contentEl : null;
-      if (nextEl && nextEl.matches && nextEl.matches('[data-testid*="media" i], [data-testid*="file" i], [data-testid*="attachment" i], [class*="media-card" i], [class*="file-card" i], [class*="attachment" i]')) {
-        const cardClone = deepCloneWithShadowsAndSvgs(nextEl);
-        clone.appendChild(cardClone);
-        i++;
+      const textContent = clone.textContent.trim();
+      const hasMedia = clone.querySelector('img, canvas, svg, iframe, table');
+      if (textContent || hasMedia) {
+        messages.push({ role, html: clone.innerHTML });
       }
     }
-
-    if (platform === 'Rovo' || url.includes('atlassian')) {
-      normalizeSmartLinksAndLists(clone);
-    }
-
-    cleanNoise(clone);
-    await processImages(clone);
-
-    const textContent = clone.textContent.trim();
-    const hasMedia = clone.querySelector('img, canvas, svg, iframe, table');
-    if (textContent || hasMedia) {
-      messages.push({ role, html: clone.innerHTML });
-    }
-  }
   } finally {
+    try {
+      window.dispatchEvent(new Event('afterprint'));
+    } catch (e) {}
     restoreScrollPositions(savedScroll);
   }
 

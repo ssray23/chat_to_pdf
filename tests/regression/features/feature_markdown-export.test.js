@@ -272,6 +272,40 @@ describe('[FEATURE] Markdown (.md) Export Regression Suite', () => {
       expect(sanitizeFilename('   Clean Title   ')).toBe('Clean_Title.md');
       expect(sanitizeFilename('', '.md')).toBe('AI_Conversation.md');
     });
+
+    test('exports full multi-turn conversation with user prompt cards and horizontal dividers', () => {
+      const chatData = {
+        platform: 'Rovo',
+        title: 'Series Seating Sales',
+        url: 'https://atlassian.net/rovo/chat/1',
+        messages: [
+          { role: 'user', html: '<p>As part of SSS initiative, we are introducing new payment methods.</p><p>Summary of Proposed Changes</p>' },
+          { role: 'assistant', html: '<h2>Impact Assessment</h2><p>Here is the assessment.</p>' },
+          { role: 'user', html: '<p>first explain what a credit file is and how it works</p>' },
+          { role: 'assistant', html: '<h3>What is a Credit File?</h3><p>In eRes, credit shell is an internal mechanism.</p>' },
+          { role: 'user', html: '<p>what is dedicated form of payment FOP</p>' },
+          { role: 'assistant', html: '<h3>What is FOP?</h3><p>FOP represents an official payment classification.</p>' },
+          { role: 'user', html: '<p>is there any updated needed in ATCOM?</p>' },
+          { role: 'assistant', html: '<p>Yes, updates are required in ATCOM.</p>' }
+        ]
+      };
+
+      const result = convertChatToMarkdown(chatData);
+
+      // Verify all 4 turns are present
+      expect(result.markdown).toContain('> As part of SSS initiative');
+      expect(result.markdown).toContain('## Impact Assessment');
+      expect(result.markdown).toContain('> ### first explain what a credit file is and how it works');
+      expect(result.markdown).toContain('### What is a Credit File?');
+      expect(result.markdown).toContain('> ### what is dedicated form of payment FOP');
+      expect(result.markdown).toContain('### What is FOP?');
+      expect(result.markdown).toContain('> ### is there any updated needed in ATCOM?');
+      expect(result.markdown).toContain('Yes, updates are required in ATCOM.');
+
+      // Verify dividers between turns
+      const dividerCount = (result.markdown.match(/\n---\n/g) || []).length;
+      expect(dividerCount).toBe(4); // 1 header divider + 3 turn dividers
+    });
   });
 
 });
