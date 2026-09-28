@@ -68,37 +68,45 @@ Since this extension is in development, you can load it unpacked directly in Goo
 
 1. Open any conversation thread on [Claude](https://claude.ai), [ChatGPT](https://chatgpt.com), [Gemini](https://gemini.google.com), [Grok](https://grok.com), or Atlassian Rovo.
 2. Click the **AI Exporter** action icon in your Chrome toolbar.
-3. The popup will automatically detect the active AI platform. Click **Export to PDF**.
-4. A new browser tab will open, showing a clean preview of your styled document.
-5. The print dialog will open automatically:
-   - **Destination**: Choose **Save as PDF** or select your printer.
-   - **More settings**:
-     - Keep **Background graphics** checked to print alternating row shading.
-     - Uncheck **Headers and footers** if you want to remove default browser URL headers.
-6. Click **Save** or **Print**.
+3. The popup will automatically detect the active AI platform. Click **Export to Markdown**.
+4. The conversation is extracted across all virtualized turns, converted to GitHub-Flavored Markdown, and downloaded as a `.md` file.
+5. Open the downloaded `.md` file in **Typora** (configured with your [clean-compact.css](<./clean-compact.css>) theme):
+   - User prompts render as cards with a 3px blue accent bar and light card background.
+   - Tables render with 8px rounded corners and alternating zebra striping.
+   - Code blocks and ASCII architecture diagrams render in JetBrains Mono code fences without line-number gutters.
+   - Zero page-break clipping or margin cut-offs!
+
+> [!NOTE]
+> The **Export to PDF** button is temporarily disabled in the popup in favor of native Markdown export, which eliminates all page setup and text-clipping issues.
 
 ---
 
 ## How It Works (Technical Overview)
 
-### 1. Robust Page Scraping (`content.js`)
-When you click export, the extension queries the DOM for conversation messages. Because AI interfaces frequently update their class names, the script targets a comprehensive list of selectors (including wildcards like `div[class*="font-claude"]` and `div[class*="claude-message"]`). 
+### 1. Robust Page Scraping & Virtual Scroll Aggregation (`content.js`)
+When you click export:
+- The extension fires a `beforeprint` event to prompt React/Atlaskit components to un-virtualize hidden conversation turns.
+- A virtual scroll collector (`collectTurns`) sweeps the scroll container from top to bottom in smooth, overlapping steps, capturing all mounted message turns in chronological order.
+- Each unique turn is cloned immediately into memory (`deepCloneWithShadowsAndSvgs`), preventing virtual unmounting or DOM recycling from discarding off-screen turns.
+- A multi-signal role classifier (`isUserTurn`) identifies user prompt bubbles via Atlaskit brand colors (`rgb(12, 102, 228)`), right-alignment, and test IDs, distinguishing them from assistant responses even when rich formatting (`.ak-renderer-document`) is present.
+- Sent user questions are preserved regardless of button semantics or container tags, and code-block line-number gutters are cleanly stripped.
 
-The scraper executes a custom tree filter (`getUniqueElements()`) to eliminate duplicate nested tags and sorts the messages in chronological order.
+### 2. High-Fidelity Markdown Engine (`md-converter.js`)
+The zero-dependency conversion engine converts DOM/HTML structures into clean GitHub-Flavored Markdown:
+- **Themed Prompt Cards**: Formats user prompts into blockquotes (`> ### ...` or multi-line `> `) separated by `---` dividers, matching the Typora theme's `#write blockquote` styling.
+- **GFM Tables**: Converts HTML tables to aligned pipe tables with normalized columns and escaped pipe characters.
+- **ASCII Diagrams & Code Fences**: Preserves box-drawing characters (`[─│┌┐└┘├┤┬┴►▼▲◄]`) inside ```` ```text ... ``` ```` fences and strips line-number gutters.
+- **Clean Unicode Typography**: Replaces unrendered LaTeX math tokens (`\rightarrow` → `→`, `\times` → `×`) with standard Unicode characters and strips noisy `Preview` link suffixes.
 
-### 2. Image, Canvas, and Iframe Serialization
-To prevent media loading failures in the local printable tab (due to origin-locked blob URLs or CORS blocks):
+### 3. Image, Canvas, and Iframe Serialization
+To prevent media loading failures:
 - Every `img` tag's source is loaded and drawn onto an offscreen canvas to extract its base64 data string.
 - Every `<canvas>` element (e.g. data visualizations or charts) is captured via `canvas.toDataURL()` and replaced with a static PNG `<img>` tag.
-- Cross-origin `<iframe>` widgets (like Claude's interactive components) are temporarily auto-scaled to fit the viewport, captured via the Chrome tabs API, perfectly cropped, and exported as full-resolution static graphics.
+- Cross-origin `<iframe>` widgets are auto-scaled, captured via `chrome.tabs.captureVisibleTab`, and exported as static graphics.
 
-### 3. Local Print Rendering (`print.js` & `print.html`)
-The extracted chat nodes are stored in `chrome.storage.local` and loaded into the extension's local tab. Under Manifest V3, inline script execution is prohibited; therefore, rendering and print triggering are handled safely within a separate `print.js` file.
-
-### 4. Background and Table Resets (`print.css`)
-To guarantee a strictly white page background and eliminate copied card layouts, the stylesheet applies a universal reset:
-- `#write *` forces all child wrappers and custom tags to be transparent.
-- `#write *::before, #write *::after` disables pseudo-element background cards.
+### 4. Background and Table Resets (`print.css` & `clean-compact.css`)
+To guarantee a clean layout when printing or viewing:
+- Custom wrappers and cards are transparent to ensure zero gray background panels behind tables or text.
 - Specific Tag selectors restore backgrounds ONLY on core document elements: `#write th` (`#f9f9f9`), `#write tr:nth-child(even)` (`#f5f5f5`), code blocks (`#f8f8f8`), and blockquotes (`#f5f5f5`).
 
 ---

@@ -397,29 +397,19 @@ function formatLanguagePills(clone) {
 
 // Clean UI noise (buttons, icons, action rows, composer input toolbars)
 function cleanNoise(clone) {
-  // 1. Remove input composer / toolbar elements
+  // 1. Remove input composer / toolbar elements (strictly active inputs, never sent prompt cards)
   const composerSelectors = [
-    'form',
+    'form:not([class*="message"])',
     'textarea',
-    'input:not([type="checkbox"])',
-    '[data-testid*="composer" i]',
-    '[data-testid*="prompt-box" i]',
-    '[data-testid*="prompt-input" i]',
-    '[data-testid*="prompt-editor" i]',
-    '[data-testid*="chat-input" i]',
-    '[class*="Composer" i]:not([class*="--composer" i])',
-    '[class*="composer" i]:not([class*="--composer" i])',
-    '[class*="PromptBar" i]',
-    '[class*="prompt-bar" i]',
-    '[class*="PromptInput" i]',
-    '[class*="prompt-input" i]',
-    '[class*="BottomBar" i]',
-    '[class*="bottom-bar" i]',
+    'input:not([type="checkbox"]):not([type="radio"])',
+    '[data-testid="composer"]',
+    '[data-testid="prompt-composer"]',
+    '[data-testid*="chat-composer" i]',
+    '[class*="Composer" i]:not([class*="--composer" i]):not([class*="message" i])',
+    '[class*="composer" i]:not([class*="--composer" i]):not([class*="message" i])',
     '[class*="ActionToolbar" i]',
     '[class*="action-toolbar" i]',
-    '[class*="PromptContainer" i]',
-    '[aria-label*="prompt" i]',
-    '[aria-label*="Add sources" i]'
+    '[aria-label="Add sources" i]'
   ];
 
   composerSelectors.forEach(sel => {
@@ -435,10 +425,7 @@ function cleanNoise(clone) {
     }
   });
 
-  // 2. Remove action buttons, but PRESERVE:
-  //    a) Interactive media cards / image attachments
-  //    b) Suggested follow-up prompt buttons (e.g. "↳ Read the full Confluence page...")
-  //    c) Sources pills (e.g. "10 Sources" / "14 Issues")
+  // 2. Remove action buttons, but PRESERVE user messages, media cards, and content:
   clone.querySelectorAll('button, [role="button"]').forEach(el => {
     const isMediaCard = el.matches && el.matches('[data-testid*="media" i], [data-testid*="file" i], [data-testid*="attachment" i], [class*="media-card" i], [class*="file-card" i], [class*="attachment" i], [class*="thumbnail" i], div[data-node-type="media" i]');
     const hasMediaCardChild = el.querySelector('[data-testid*="media" i], [data-testid*="file" i], [data-testid*="attachment" i], [class*="media-card" i], [class*="file-card" i], [class*="attachment" i], div[data-node-type="media" i]');
@@ -489,26 +476,24 @@ function cleanNoise(clone) {
       div.className = 'rovo-suggested-prompt';
       div.innerHTML = `<span class="suggested-prompt-arrow">↳</span> <span class="suggested-prompt-text">${cleanPrompt}</span>`;
       el.replaceWith(div);
+    } else if (isActionControl || isFeedbackOrDebug) {
+      // Strictly remove UI control buttons (Copy, Feedback, Thumbs, Submit)
+      el.remove();
     } else {
-      // If it's a large text block (like an expandable tool log, timeline, or code block), preserve it.
-      // Real UI action buttons rarely have > 80 characters of text.
-      if (text.length > 80 && !isActionControl) {
-        el.removeAttribute('role');
-        el.removeAttribute('tabindex');
-        if (el.tagName.toLowerCase() === 'button') {
-          const div = document.createElement('div');
-          for (let i = 0; i < el.attributes.length; i++) {
-            const attr = el.attributes[i];
-            div.setAttribute(attr.name, attr.value);
-          }
-          while (el.firstChild) {
-            div.appendChild(el.firstChild);
-          }
-          el.replaceWith(div);
+      // For any other button or role="button" (such as clickable user prompt bubbles or cards):
+      // NEVER delete! Preserve the full prompt text and convert to a clean div.
+      el.removeAttribute('role');
+      el.removeAttribute('tabindex');
+      if (el.tagName.toLowerCase() === 'button') {
+        const div = document.createElement('div');
+        for (let i = 0; i < el.attributes.length; i++) {
+          const attr = el.attributes[i];
+          div.setAttribute(attr.name, attr.value);
         }
-      } else {
-        // Remove all short action buttons (+Add, Submit, Auto, Copy, Thumbs, Feedback, etc.)
-        el.remove();
+        while (el.firstChild) {
+          div.appendChild(el.firstChild);
+        }
+        el.replaceWith(div);
       }
     }
   });
@@ -1046,7 +1031,7 @@ function hasUserBubbleStyle(el) {
 function isUserTurn(el) {
   if (!el) return false;
 
-  // 1. Explicit author role attributes
+  // 1. Explicit author role attributes on el, descendants, or ancestors
   const authorRole = (el.getAttribute('data-message-author-role') || el.getAttribute('data-role') || el.getAttribute('role') || '').toLowerCase();
   if (authorRole === 'user' || authorRole === 'human') return true;
   if (authorRole === 'assistant' || authorRole === 'agent' || authorRole === 'model' || authorRole === 'bot') return false;
@@ -1056,6 +1041,7 @@ function isUserTurn(el) {
   if (tagName === 'model-response') return false;
 
   if (el.querySelector && el.querySelector('[data-message-author-role="user"]')) return true;
+  if (el.closest && el.closest('[data-message-author-role="user"]')) return true;
   if (el.querySelector && el.querySelector('[data-message-author-role="assistant"]')) return false;
 
   // 2. Explicit User testid or class markers (excluding parent message containers that also match 'assistant' or 'agent' or 'rovo')
@@ -1066,16 +1052,23 @@ function isUserTurn(el) {
                               /\b(assistant-message|agent-message|rovo-message|claude-message)\b/i.test(className);
 
   if (!isExplicitAssistant) {
-    if (/\b(user-message|font-user|user_message|user-query)\b/i.test(testId) || /\b(user-message|font-user|usermessage)\b/i.test(className)) {
+    if (/\b(user|human|query|prompt|sent)\b/i.test(testId) || /\b(user-message|font-user|usermessage|user_message|user-query)\b/i.test(className)) {
       return true;
     }
-    if (el.querySelector && el.querySelector('[data-testid*="user-message" i], [class*="UserMessage" i], [class*="user-message" i]')) {
+    if (el.querySelector && el.querySelector('[data-testid*="user" i], [class*="UserMessage" i], [class*="user-message" i], [class*="user_message" i]')) {
+      return true;
+    }
+    if (el.closest && el.closest('[data-testid*="user" i], [class*="UserMessage" i], [class*="user-message" i]')) {
       return true;
     }
   }
 
-  // 3. User bubble styling (Blue bubble / dark pill on el or any child)
+  // 3. User bubble styling (Blue bubble / dark pill on el, ancestor, or any child)
   if (hasUserBubbleStyle(el)) return true;
+  if (el.parentElement && hasUserBubbleStyle(el.parentElement)) return true;
+  if (el.closest && (el.closest('[style*="rgb(12, 102, 228)"]') || el.closest('[style*="rgb(0, 82, 204)"]') || el.closest('[style*="rgb(0, 101, 255)"]'))) {
+    return true;
+  }
   if (el.querySelectorAll) {
     const bubbles = el.querySelectorAll('div, section, p, span');
     for (let i = 0; i < Math.min(bubbles.length, 15); i++) {
@@ -1448,10 +1441,13 @@ async function getChatMessages(platform) {
     } else if (platform === 'Rovo' || url.includes('atlassian.net') || url.includes('atlassian.com')) {
       const isComposerOrToolbar = (el) => {
         if (!el) return false;
-        if (el.closest && el.closest('form, footer, [data-testid*="composer" i], [data-testid*="prompt-box" i], [data-testid*="prompt-input" i], [class*="Composer" i]:not([class*="--composer" i]), [class*="composer" i]:not([class*="--composer" i]), [class*="PromptBar" i], [class*="prompt-bar" i], [class*="Toolbar" i], [class*="toolbar" i], [class*="prompt-input" i]')) {
+        if (el.matches && el.matches('form, [data-testid="composer"], [data-testid="chat-composer"], footer[role="contentinfo"]')) {
           return true;
         }
-        if (el.querySelector && el.querySelector('textarea, input[type="text"], [contenteditable="true"]')) {
+        if (el.closest && el.closest('form, [data-testid="composer"], [data-testid="chat-composer"], footer[role="contentinfo"]')) {
+          return true;
+        }
+        if (el.querySelector && el.querySelector('textarea:not([readonly]), [contenteditable="true"]:not([contenteditable="false"])')) {
           return true;
         }
         return false;
@@ -1464,10 +1460,11 @@ async function getChatMessages(platform) {
         'div[class*="message-row" i]:not([class*="list" i]):not([class*="container" i])',
         'div[class*="ChatMessage" i]:not([class*="list" i]):not([class*="container" i]):not([class*="wrapper" i])',
         'div[class*="chat-message" i]:not([class*="list" i]):not([class*="container" i]):not([class*="wrapper" i])',
-        '[data-testid*="user-message" i]',
-        'div[class*="UserMessage" i]',
-        'div[class*="user-message" i]',
+        '[data-testid*="user" i]',
+        'div[class*="User" i]:not([class*="list" i]):not([class*="container" i])',
+        'div[class*="user" i]:not([class*="list" i]):not([class*="container" i])',
         'div[class*="bubble" i]',
+        'div[class*="Bubble" i]',
         '.ak-renderer-document',
         '[data-testid*="assistant-message" i]',
         '[data-testid*="rovo-message" i]',

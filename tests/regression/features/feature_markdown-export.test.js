@@ -306,6 +306,21 @@ describe('[FEATURE] Markdown (.md) Export Regression Suite', () => {
       const dividerCount = (result.markdown.match(/\n---\n/g) || []).length;
       expect(dividerCount).toBe(4); // 1 header divider + 3 turn dividers
     });
+
+    test('preserves user questions inside clickable buttons or card containers without deletion', () => {
+      const chatData = {
+        platform: 'Rovo',
+        title: 'Short Questions',
+        messages: [
+          { role: 'user', html: '<div role="button" tabindex="0"><p>what is dedicated form of payment FOP</p></div>' },
+          { role: 'assistant', html: '<p>FOP is an official method.</p>' }
+        ]
+      };
+
+      const result = convertChatToMarkdown(chatData);
+      expect(result.markdown).toContain('> ### what is dedicated form of payment FOP');
+      expect(result.markdown).toContain('FOP is an official method.');
+    });
   });
 
 });
