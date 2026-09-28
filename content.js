@@ -1259,14 +1259,61 @@ function extractAdaptiveTurns(root = document.body) {
   return extracted;
 }
 
+// Ensure any virtualized or lazy-loaded turns are loaded into the DOM before scraping
+async function ensureFullConversationLoaded(platform) {
+  try {
+    const scrollContainers = [
+      document.querySelector('[data-testid*="chat-scroll" i]'),
+      document.querySelector('[data-testid*="message-list" i]'),
+      document.querySelector('[class*="ScrollContainer" i]'),
+      document.querySelector('[class*="message-list" i]'),
+      document.querySelector('[class*="chat-history" i]'),
+      document.querySelector('main [class*="overflow-y-auto" i]'),
+      document.querySelector('main'),
+      document.scrollingElement || document.documentElement
+    ].filter(Boolean);
+
+    const scrollContainer = scrollContainers.find(c => c.scrollHeight > c.clientHeight + 80);
+    if (!scrollContainer) return;
+
+    // Check if the container is scrolled down and might have unloaded earlier turns
+    const currentScroll = scrollContainer === document.documentElement ? window.scrollY : scrollContainer.scrollTop;
+    if (currentScroll > 50) {
+      let attempts = 0;
+      let prevHeight = scrollContainer.scrollHeight;
+      
+      while (attempts < 8) {
+        if (scrollContainer === document.documentElement) {
+          window.scrollTo({ top: 0, behavior: 'instant' });
+        } else {
+          scrollContainer.scrollTop = 0;
+        }
+
+        await new Promise(r => setTimeout(r, 180));
+        const newHeight = scrollContainer.scrollHeight;
+        if (newHeight === prevHeight && (scrollContainer === document.documentElement ? window.scrollY : scrollContainer.scrollTop) <= 0) {
+          break;
+        }
+        prevHeight = newHeight;
+        attempts++;
+      }
+    }
+  } catch (err) {
+    console.warn('Scroll pre-load non-fatal warning:', err);
+  }
+}
+
 // Scrape chat messages by platform with self-adapting DOM change detection
 async function getChatMessages(platform) {
   const messages = [];
   const url = window.location.href;
+  const savedScroll = saveScrollPositions();
 
-  await captureCrossoriginIframes();
+  try {
+    await ensureFullConversationLoaded(platform);
+    await captureCrossoriginIframes();
 
-  let extractedTurns = [];
+    let extractedTurns = [];
 
   if (platform === 'ChatGPT' || url.includes('chatgpt.com') || url.includes('chat.openai.com')) {
     const isSharePage = url.includes('/share/');
@@ -1418,6 +1465,9 @@ async function getChatMessages(platform) {
     if (textContent || hasMedia) {
       messages.push({ role, html: clone.innerHTML });
     }
+  }
+  } finally {
+    restoreScrollPositions(savedScroll);
   }
 
   return messages;

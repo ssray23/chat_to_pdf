@@ -402,7 +402,11 @@
     // PARAGRAPHS
     if (tagName === 'p') {
       const inner = convertChildren(node, options, state).trim();
-      return inner ? `\n\n${inner}\n\n` : '';
+      if (!inner) return '';
+      if (state.inList) {
+        return `${inner}\n`;
+      }
+      return `\n\n${inner}\n\n`;
     }
 
     // BLOCKQUOTES
@@ -525,35 +529,50 @@
       const listDepth = state.listDepth || 0;
       const indent = '  '.repeat(listDepth);
 
-      let result = '\n';
+      let result = '';
       const childNodes = Array.from(node.children);
 
       for (const child of childNodes) {
         if (child.tagName && child.tagName.toLowerCase() === 'li') {
-          // Check for task list checkboxes
           let itemPrefix = isOrdered ? `${listIndex}. ` : '- ';
           listIndex++;
 
-          // Check if item starts with checkbox or task marker
+          // Check for task list checkboxes
           const chk = child.querySelector('input[type="checkbox"]');
           if (chk) {
             itemPrefix = chk.checked ? '- [x] ' : '- [ ] ';
           }
 
-          const nextState = Object.assign({}, state, { listDepth: listDepth + 1 });
-          const itemText = convertChildren(child, options, nextState).trim();
+          const nextState = Object.assign({}, state, { listDepth: listDepth + 1, inList: true });
           
-          if (itemText) {
-            // Indent any multi-line content inside the list item
-            const indented = itemText
-              .split('\n')
-              .map((line, idx) => (idx === 0 ? line : `${indent}  ${line}`))
-              .join('\n');
-            result += `${indent}${itemPrefix}${indented}\n`;
+          let directContent = '';
+          let subListContent = '';
+
+          for (const c of child.childNodes) {
+            if (c.nodeType === 1 && (c.tagName === 'UL' || c.tagName === 'OL')) {
+              subListContent += convertNode(c, options, nextState);
+            } else {
+              directContent += convertNode(c, options, nextState);
+            }
           }
+
+          directContent = directContent.trim();
+          subListContent = subListContent.trimEnd();
+
+          if (directContent.includes('\n')) {
+            const lines = directContent.split('\n');
+            const contIndent = ' '.repeat(itemPrefix.length);
+            directContent = lines.map((l, idx) => (idx === 0 || !l.trim() ? l : `${indent}${contIndent}${l}`)).join('\n');
+          }
+
+          let itemOutput = `${indent}${itemPrefix}${directContent}`;
+          if (subListContent) {
+            itemOutput += `\n${subListContent}`;
+          }
+          result += `${itemOutput}\n`;
         }
       }
-      return `${result}\n`;
+      return listDepth === 0 ? `\n${result}\n` : result;
     }
 
     // TABLES
@@ -758,12 +777,13 @@
       .replace(/\[([^\]\n]+?)\s*Preview\b([^\]\n]*?)\]\(([^)]+)\)/gi, '[$1$2]($3)');
 
     // 4. Remove excessive / duplicate horizontal rules (especially right before or after headings)
-    out = out
-      .replace(/(?:\n\s*---\s*){2,}/g, '\n\n---\n\n')
-      .replace(/\n\s*---\s*\n+(\s*#{1,6}\s+)/g, '\n\n$1')
-      .replace(/(\s*#{1,6}\s+[^\n]+)\n+\s*---\s*\n/g, '$1\n\n');
+    // 5. Prevent unwanted indented code blocks from forming on sub-list items:
+    // (a) Remove blank lines between parent list items and their immediate nested sub-lists
+    out = out.replace(/(\n[ \t]*(?:[-*+]|\d+\.)[^\n]+)\n+[ \t]{2,}([-*+]|\d+\.)/g, '$1\n  $2');
+    // (b) Ensure sub-list items never have 4+ leading spaces after a blank line
+    out = out.replace(/\n\n[ \t]{4,}([-*+]|\d+\.)/g, '\n\n  $1');
 
-    // 5. Clean up leading/trailing dashes and multiple newlines
+    // 6. Clean up leading/trailing dashes and multiple newlines
     out = out
       .replace(/\n{3,}/g, '\n\n')
       .trim();

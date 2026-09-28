@@ -99,6 +99,26 @@ describe('[FEATURE] Markdown (.md) Export Regression Suite', () => {
       expect(md).toContain('  - Nested child 2');
     });
 
+    test('converts nested lists with paragraph headers without creating 4-space indented code blocks', () => {
+      const html = `
+        <ol>
+          <li>
+            <p><strong>Dual-Running / In-Flight Bookings:</strong></p>
+            <ul>
+              <li>Bookings created before cutover</li>
+              <li><strong>Mitigation:</strong> Ensure eRes backward compatibility</li>
+            </ul>
+          </li>
+        </ol>
+      `;
+      const md = htmlToMarkdown(html);
+      expect(md).toContain('1. **Dual-Running / In-Flight Bookings:**');
+      expect(md).toContain('  - Bookings created before cutover');
+      expect(md).toContain('  - **Mitigation:** Ensure eRes backward compatibility');
+      expect(md).not.toContain('\n\n    -');
+      expect(md).not.toContain('\n    -');
+    });
+
     test('converts checkbox items to GFM task list format', () => {
       const html = `
         <ul>
