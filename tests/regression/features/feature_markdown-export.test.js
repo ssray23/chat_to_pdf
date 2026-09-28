@@ -231,7 +231,7 @@ describe('[FEATURE] Markdown (.md) Export Regression Suite', () => {
       expect(result.markdown).toContain('**Source:** Claude');
       expect(result.markdown).not.toContain('🧑 User');
       expect(result.markdown).not.toContain('🤖 Assistant');
-      expect(result.markdown).toContain('> ### Can we export as markdown?');
+      expect(result.markdown).toContain('> ### **Can we export as markdown?**');
       expect(result.markdown).toContain('Yes, absolutely! Here is why:');
       expect(result.markdown).toContain('- No margin clipping');
       expect(result.markdown).toContain('- Reflowable text');
@@ -293,13 +293,13 @@ describe('[FEATURE] Markdown (.md) Export Regression Suite', () => {
       const result = convertChatToMarkdown(chatData);
 
       // Verify all 4 turns are present
-      expect(result.markdown).toContain('> As part of SSS initiative');
+      expect(result.markdown).toContain('> ### **As part of SSS initiative');
       expect(result.markdown).toContain('## Impact Assessment');
-      expect(result.markdown).toContain('> ### first explain what a credit file is and how it works');
+      expect(result.markdown).toContain('> ### **first explain what a credit file is and how it works**');
       expect(result.markdown).toContain('### What is a Credit File?');
-      expect(result.markdown).toContain('> ### what is dedicated form of payment FOP');
+      expect(result.markdown).toContain('> ### **what is dedicated form of payment FOP**');
       expect(result.markdown).toContain('### What is FOP?');
-      expect(result.markdown).toContain('> ### is there any updated needed in ATCOM?');
+      expect(result.markdown).toContain('> ### **is there any updated needed in ATCOM?**');
       expect(result.markdown).toContain('Yes, updates are required in ATCOM.');
 
       // Verify dividers between turns
@@ -318,7 +318,7 @@ describe('[FEATURE] Markdown (.md) Export Regression Suite', () => {
       };
 
       const result = convertChatToMarkdown(chatData);
-      expect(result.markdown).toContain('> ### what is dedicated form of payment FOP');
+      expect(result.markdown).toContain('> ### **what is dedicated form of payment FOP**');
       expect(result.markdown).toContain('FOP is an official method.');
     });
   });

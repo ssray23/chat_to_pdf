@@ -889,17 +889,30 @@
           doc += '\n\n---\n\n';
         }
 
-        // Format User Prompt as a themed card (blockquote with left accent line, matching PDF)
-        const isSingleLine = !turnMd.includes('\n') && turnMd.length < 200 && !turnMd.startsWith('#');
+        // Format User Prompt as a prominent, bolded themed card
+        const cleanPrompt = turnMd.trim();
+        const lines = cleanPrompt.split('\n');
+        const isSingleLine = lines.length === 1 && cleanPrompt.length < 250 && !cleanPrompt.startsWith('#');
+
         if (isSingleLine) {
-          // Single-line prompt: formatted in card heading style
-          doc += `> ### ${turnMd}\n\n`;
+          const text = cleanPrompt.replace(/^\*\*|\*\*$/g, '');
+          doc += `> ### **${text}**\n\n`;
         } else {
-          // Multi-block prompt: prefix lines with `> ` to render as unified card
-          const cardLines = turnMd
-            .split('\n')
-            .map(line => line.trim() ? `> ${line}` : '>')
-            .join('\n');
+          let cardLines = '';
+          for (let l = 0; l < lines.length; l++) {
+            const trimmed = lines[l].trim();
+            if (!trimmed) {
+              cardLines += '>\n';
+            } else if (l === 0 && !trimmed.startsWith('#') && !trimmed.startsWith('```')) {
+              const text = trimmed.replace(/^\*\*|\*\*$/g, '');
+              cardLines += `> ### **${text}**\n`;
+            } else if (trimmed.startsWith('#') || trimmed.startsWith('```') || trimmed.startsWith('- ') || trimmed.startsWith('* ') || /^\d+\.\s/.test(trimmed)) {
+              cardLines += `> ${trimmed}\n`;
+            } else {
+              const text = trimmed.replace(/^\*\*|\*\*$/g, '');
+              cardLines += `> **${text}**\n`;
+            }
+          }
           doc += `${cardLines}\n\n`;
         }
       } else {

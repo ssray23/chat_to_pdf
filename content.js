@@ -1043,13 +1043,15 @@ function isUserTurn(el) {
   if (el.querySelector && el.querySelector('[data-message-author-role="user"]')) return true;
   if (el.closest && el.closest('[data-message-author-role="user"]')) return true;
   if (el.querySelector && el.querySelector('[data-message-author-role="assistant"]')) return false;
+  if (el.classList && el.classList.contains('ak-renderer-document')) return false;
+  if (el.querySelector && el.querySelector('.ak-renderer-document')) return false;
 
-  // 2. Explicit User testid or class markers (excluding parent message containers that also match 'assistant' or 'agent' or 'rovo')
+  // 2. Explicit User testid or class markers (excluding parent message containers that also match 'assistant' or 'agent')
   const testId = (el.getAttribute('data-testid') || '').toLowerCase();
   const className = el.className && typeof el.className === 'string' ? el.className.toLowerCase() : '';
 
-  const isExplicitAssistant = /\b(assistant|agent|rovo|model|bot|model-response)\b/i.test(testId) || 
-                              /\b(assistant-message|agent-message|rovo-message|claude-message)\b/i.test(className);
+  const isExplicitAssistant = /\b(assistant-message|agent-message|model-response|bot-message)\b/i.test(testId) || 
+                              /\b(assistant-message|agent-message|claude-message)\b/i.test(className);
 
   if (!isExplicitAssistant) {
     if (/\b(user|human|query|prompt|sent)\b/i.test(testId) || /\b(user-message|font-user|usermessage|user_message|user-query)\b/i.test(className)) {
@@ -1069,6 +1071,17 @@ function isUserTurn(el) {
   if (el.closest && (el.closest('[style*="rgb(12, 102, 228)"]') || el.closest('[style*="rgb(0, 82, 204)"]') || el.closest('[style*="rgb(0, 101, 255)"]'))) {
     return true;
   }
+  try {
+    const cs = window.getComputedStyle(el);
+    const col = cs.color || '';
+    if (/rgba?\(25[0-5],\s*25[0-5],\s*25[0-5]/.test(col) && el.textContent.trim().length > 0) {
+      const bg = cs.backgroundColor || '';
+      if (bg && bg !== 'transparent' && bg !== 'rgba(0, 0, 0, 0)') {
+        return true;
+      }
+    }
+  } catch (e) {}
+
   if (el.querySelectorAll) {
     const bubbles = el.querySelectorAll('div, section, p, span');
     for (let i = 0; i < Math.min(bubbles.length, 15); i++) {
@@ -1107,12 +1120,18 @@ function classifyTurnRole(el, index = 0, totalTurns = 1) {
   const testId = (el.getAttribute('data-testid') || '').toLowerCase();
   const className = el.className && typeof el.className === 'string' ? el.className.toLowerCase() : '';
 
-  if (/\b(assistant|agent|model|response|bot|answer|claude-message|rovo|prose)\b/.test(className) || /\b(assistant|agent|model|response|bot|answer|rovo)\b/.test(testId)) {
+  if (/\b(assistant-message|agent-message|model-response|bot-message)\b/i.test(className) || /\b(assistant-message|agent-message|model-response|bot-message)\b/i.test(testId)) {
     return 'assistant';
   }
 
   if (el.classList.contains('ak-renderer-document') || (el.querySelector && el.querySelector('.ak-renderer-document'))) {
     return 'assistant';
+  }
+
+  // On Atlassian / Rovo platform: any turn in conversation that does not have .ak-renderer-document is a user prompt
+  const isAtlassianRovo = (typeof window !== 'undefined' && window.location && (window.location.href.includes('atlassian') || window.location.href.includes('rovo')));
+  if (isAtlassianRovo && !el.querySelector('.ak-renderer-document')) {
+    return 'user';
   }
 
   // 3. Rich Markdown / Assistant Content Fingerprint
