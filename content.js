@@ -757,70 +757,80 @@ function normalizeSmartLinksAndLists(container) {
         child.remove();
       }
     });
+  });
 
-    // Find links inside the list item
-    const links = li.querySelectorAll('a, [data-testid*="inline-card" i], [class*="InlineCard" i], [data-smart-card]');
-    links.forEach(link => {
-      const linkText = link.textContent.trim();
-      const href = link.getAttribute('href') || '#';
+  // Strip preview buttons and preview text from inside smart cards
+  container.querySelectorAll('a button, [data-testid*="preview" i], button[class*="preview" i]').forEach(btn => {
+    if (btn.textContent.trim().toLowerCase() === 'preview') {
+      btn.remove();
+    }
+  });
 
-      // Match Jira Issue Link (e.g. DO-1515: Title [Done/In Use])
-      const jiraMatch = linkText.match(/^([☑☐\s]*)([A-Z]+-\d+:\s*.+?)(Done|In Use|In Progress|To Do|In Review|Closed|Open|Resolved|Under Review|Blocked|Wont Do|Won't Do)?$/i);
-      
-      if (jiraMatch && jiraMatch[2]) {
-        const iconChar = '☑';
-        let issueTitle = jiraMatch[2].trim();
-        let status = jiraMatch[3] ? jiraMatch[3].trim() : '';
+  // Find all smart links inside the entire container (both in paragraphs and list items)
+  const links = container.querySelectorAll('a, [data-testid*="inline-card" i], [class*="InlineCard" i], [data-smart-card]');
+  links.forEach(link => {
+    // Skip if already converted
+    if (link.classList.contains('atlassian-smart-chip')) return;
 
-        // Check if there's a separate lozenge element inside the link or next to it
-        const nestedLozenge = link.querySelector('[data-testid*="lozenge" i], [class*="lozenge" i], [class*="Lozenge" i]');
-        if (nestedLozenge) {
-          status = nestedLozenge.textContent.trim();
-        } else if (!status) {
-          const siblingLozenge = link.nextElementSibling && link.nextElementSibling.matches('[data-testid*="lozenge" i], [class*="lozenge" i]') ? link.nextElementSibling : null;
-          if (siblingLozenge) {
-            status = siblingLozenge.textContent.trim();
-            siblingLozenge.remove();
-          }
+    let linkText = link.textContent.replace(/\s*Preview$/i, '').trim();
+    const href = link.getAttribute('href') || '#';
+
+    // Match Jira Issue Link (e.g. DO-1515: Title [Done/In Use])
+    const jiraMatch = linkText.match(/^([☑☐\s]*)([A-Z]+-\d+:\s*.+?)(Done|In Use|In Progress|To Do|In Review|Closed|Open|Resolved|Under Review|Blocked|Wont Do|Won't Do)?$/i);
+    
+    if (jiraMatch && jiraMatch[2]) {
+      const iconChar = '☑';
+      let issueTitle = jiraMatch[2].trim();
+      let status = jiraMatch[3] ? jiraMatch[3].trim() : '';
+
+      // Check if there's a separate lozenge element inside the link or next to it
+      const nestedLozenge = link.querySelector('[data-testid*="lozenge" i], [class*="lozenge" i], [class*="Lozenge" i]');
+      if (nestedLozenge) {
+        status = nestedLozenge.textContent.trim();
+      } else if (!status) {
+        const siblingLozenge = link.nextElementSibling && link.nextElementSibling.matches('[data-testid*="lozenge" i], [class*="lozenge" i]') ? link.nextElementSibling : null;
+        if (siblingLozenge) {
+          status = siblingLozenge.textContent.trim();
+          siblingLozenge.remove();
         }
+      }
 
-        if (status) {
-          const statusRegex = new RegExp(`\\s*${status}$`, 'i');
-          issueTitle = issueTitle.replace(statusRegex, '').trim();
-        }
+      if (status) {
+        const statusRegex = new RegExp(`\\s*${status}$`, 'i');
+        issueTitle = issueTitle.replace(statusRegex, '').trim();
+      }
 
+      const chip = document.createElement('a');
+      chip.className = 'atlassian-smart-chip';
+      chip.href = href;
+
+      let statusClass = 'status-done';
+      const stLower = status.toLowerCase();
+      if (stLower.includes('progress') || stLower.includes('review')) statusClass = 'status-in-progress';
+      else if (stLower.includes('to do') || stLower.includes('open')) statusClass = 'status-todo';
+      else if (stLower.includes('block') || stLower.includes('warn')) statusClass = 'status-blocked';
+      else if (stLower.includes('use') || stLower.includes('done') || stLower.includes('resolv')) statusClass = 'status-done';
+
+      chip.innerHTML = `
+        <span class="smart-chip-icon">${iconChar}</span>
+        <span class="smart-chip-title">${issueTitle}</span>
+        ${status ? `<span class="smart-chip-lozenge ${statusClass}">${status}</span>` : ''}
+      `;
+
+      link.replaceWith(chip);
+    } else if (linkText.startsWith('🗎') || link.querySelector('svg') || href.includes('confluence') || href.includes('atlassian') || link.matches('[data-testid*="inline-card" i], [class*="InlineCard" i]')) {
+      const titleText = linkText.replace(/^[🗎\s]+/, '').replace(/\s*Preview$/i, '').trim();
+      if (titleText) {
         const chip = document.createElement('a');
         chip.className = 'atlassian-smart-chip';
         chip.href = href;
-
-        let statusClass = 'status-done';
-        const stLower = status.toLowerCase();
-        if (stLower.includes('progress') || stLower.includes('review')) statusClass = 'status-in-progress';
-        else if (stLower.includes('to do') || stLower.includes('open')) statusClass = 'status-todo';
-        else if (stLower.includes('block') || stLower.includes('warn')) statusClass = 'status-blocked';
-        else if (stLower.includes('use') || stLower.includes('done') || stLower.includes('resolv')) statusClass = 'status-done';
-
         chip.innerHTML = `
-          <span class="smart-chip-icon">${iconChar}</span>
-          <span class="smart-chip-title">${issueTitle}</span>
-          ${status ? `<span class="smart-chip-lozenge ${statusClass}">${status}</span>` : ''}
+          <span class="smart-chip-icon">🗎</span>
+          <span class="smart-chip-title">${titleText}</span>
         `;
-
         link.replaceWith(chip);
-      } else if (linkText.startsWith('🗎') || link.querySelector('svg') || href.includes('confluence') || href.includes('atlassian')) {
-        const titleText = linkText.replace(/^[🗎\s]+/, '').trim();
-        if (titleText) {
-          const chip = document.createElement('a');
-          chip.className = 'atlassian-smart-chip';
-          chip.href = href;
-          chip.innerHTML = `
-            <span class="smart-chip-icon">🗎</span>
-            <span class="smart-chip-title">${titleText}</span>
-          `;
-          link.replaceWith(chip);
-        }
       }
-    });
+    }
   });
 
   // 3. Format suggested prompt rows starting with ↳ (excluding feedback/debug controls)

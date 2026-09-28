@@ -17,6 +17,153 @@
 })(typeof self !== 'undefined' ? self : this, function () {
 
   /**
+   * Zero-dependency lightweight HTML parser for Node.js environments
+   */
+  function createLightweightDOM(html) {
+    class MockNode {
+      constructor(tagName, text = '') {
+        this.nodeType = tagName === '#text' ? 3 : 1;
+        this.tagName = tagName ? tagName.toUpperCase() : 'DIV';
+        this.nodeValue = text;
+        this.textContent = text;
+        this.childNodes = [];
+        this.children = [];
+        this.attributes = new Map();
+        this._classListSet = new Set();
+        const set = this._classListSet;
+        this.classList = {
+          contains: (c) => set.has(c),
+          add: (c) => set.add(c),
+          remove: (c) => set.delete(c),
+          [Symbol.iterator]: () => set.values()
+        };
+        this.parentElement = null;
+        this.previousElementSibling = null;
+        this.nextElementSibling = null;
+        this.style = {};
+      }
+      getAttribute(k) { return this.attributes.get(k) || null; }
+      setAttribute(k, v) {
+        this.attributes.set(k, v);
+        if (k === 'class' && typeof v === 'string') {
+          v.split(/\s+/).forEach(c => c && this._classListSet.add(c));
+        }
+      }
+      hasAttribute(k) { return this.attributes.has(k); }
+      appendChild(c) {
+        this.childNodes.push(c);
+        if (c.nodeType === 1) {
+          const prevEl = this.children.length > 0 ? this.children[this.children.length - 1] : null;
+          if (prevEl) {
+            prevEl.nextElementSibling = c;
+            c.previousElementSibling = prevEl;
+          }
+          this.children.push(c);
+        }
+        c.parentElement = this;
+        this.updateText();
+      }
+      updateText() {
+        if (this.nodeType === 1) {
+          this.textContent = this.childNodes.map(c => c.textContent || '').join('');
+        }
+      }
+      matches(sel) {
+        if (this.nodeType !== 1) return false;
+        const selectors = sel.split(',').map(s => s.trim());
+        return selectors.some(s => {
+          if (!s) return false;
+          if (s.startsWith('.')) {
+            return this.classList.contains(s.slice(1));
+          }
+          if (s.includes('.') && !s.includes('[')) {
+            const [tag, cls] = s.split('.');
+            return (!tag || this.tagName === tag.toUpperCase()) && this.classList.contains(cls);
+          }
+          const attrMatch = s.match(/^(?:([a-zA-Z0-9-]+))?\[([a-zA-Z0-9-_:]+)(?:([*~|^$]?=)(?:"([^"]*)"|'([^']*)'|([^\]]+)))?\]/i);
+          if (attrMatch) {
+            const [, tag, attr, op, v1, v2, v3] = attrMatch;
+            if (tag && this.tagName !== tag.toUpperCase()) return false;
+            if (!this.hasAttribute(attr)) return false;
+            const targetVal = v1 !== undefined ? v1 : (v2 !== undefined ? v2 : (v3 || ''));
+            if (!op) return true;
+            const elVal = this.getAttribute(attr) || '';
+            if (op === '=') return elVal.toLowerCase() === targetVal.toLowerCase();
+            if (op === '*=') return elVal.toLowerCase().includes(targetVal.toLowerCase());
+            if (op === '^=') return elVal.toLowerCase().startsWith(targetVal.toLowerCase());
+            if (op === '$=') return elVal.toLowerCase().endsWith(targetVal.toLowerCase());
+            return true;
+          }
+          return this.tagName === s.toUpperCase();
+        });
+      }
+      querySelector(sel) {
+        return this.querySelectorAll(sel)[0] || null;
+      }
+      querySelectorAll(sel) {
+        const out = [];
+        const walk = (el) => {
+          for (const c of el.childNodes) {
+            if (c.matches && c.matches(sel)) out.push(c);
+            walk(c);
+          }
+        };
+        walk(this);
+        return out;
+      }
+    }
+
+    const root = new MockNode('div');
+    const stack = [root];
+    const tagRegex = /<!--[\s\S]*?-->|<(\/)?([a-zA-Z0-9-]+)([^>]*)>|([^<]+)/g;
+    let match;
+
+    while ((match = tagRegex.exec(html)) !== null) {
+      if (match[4]) {
+        // Text node
+        const txt = match[4];
+        const textNode = new MockNode('#text', txt);
+        stack[stack.length - 1].appendChild(textNode);
+      } else if (match[2]) {
+        const isClosing = !!match[1];
+        const tagName = match[2].toLowerCase();
+        const attrStr = match[3];
+
+        if (isClosing) {
+          for (let i = stack.length - 1; i > 0; i--) {
+            if (stack[i].tagName.toLowerCase() === tagName) {
+              stack.splice(i);
+              break;
+            }
+          }
+        } else {
+          const el = new MockNode(tagName);
+          if (attrStr) {
+            const attrRegex = /([a-zA-Z0-9-_:]+)(?:=(?:"([^"]*)"|'([^']*)'|([^>\s]+)))?/g;
+            let mAttr;
+            while ((mAttr = attrRegex.exec(attrStr)) !== null) {
+              const name = mAttr[1];
+              const val = mAttr[2] !== undefined ? mAttr[2] : (mAttr[3] !== undefined ? mAttr[3] : (mAttr[4] || ''));
+              el.setAttribute(name, val);
+            }
+          }
+          if (el.tagName === 'INPUT' && el.getAttribute('type') === 'checkbox') {
+            el.checked = el.hasAttribute('checked') && el.getAttribute('checked') !== 'false';
+          }
+          stack[stack.length - 1].appendChild(el);
+
+          const isSelfClosing = ['br', 'hr', 'img', 'input', 'meta', 'link'].includes(tagName) || (attrStr && attrStr.trim().endsWith('/'));
+          if (!isSelfClosing) {
+            stack.push(el);
+          }
+        }
+      }
+    }
+
+    return root;
+  }
+
+  /**
    * Helper to parse HTML string into a DOM element or document
    */
   function parseHTML(html) {
@@ -29,14 +176,8 @@
       container.innerHTML = html;
       return container;
     } else {
-      // Node.js fallback with jsdom
-      try {
-        const { JSDOM } = require('jsdom');
-        const dom = new JSDOM(html);
-        return dom.window.document.body;
-      } catch (e) {
-        throw new Error('JSDOM required for server-side HTML parsing');
-      }
+      // 100% self-contained parser for pure Node.js environments
+      return createLightweightDOM(html);
     }
   }
 
@@ -190,6 +331,11 @@
       return '';
     }
 
+    // Special Element: Code language pill (language is attached to code block fence)
+    if (node.classList.contains('code-language-pill') || node.classList.contains('code-language-pill-wrapper')) {
+      return '';
+    }
+
     // Special Element: Atlassian Sources Pill
     if (node.classList.contains('atlassian-sources-pill')) {
       const text = node.textContent.trim();
@@ -203,12 +349,15 @@
     }
 
     // Special Element: Atlassian Smart Chip / Jira Issue
-    if (node.classList.contains('atlassian-smart-chip')) {
+    if (node.classList.contains('atlassian-smart-chip') || (node.matches && node.matches('[data-testid*="inline-card" i], [class*="InlineCard" i], [data-smart-card]'))) {
       const href = node.getAttribute('href') || '#';
       const icon = node.querySelector('.smart-chip-icon')?.textContent.trim() || '';
-      const title = node.querySelector('.smart-chip-title')?.textContent.trim() || node.textContent.trim();
+      let title = node.querySelector('.smart-chip-title')?.textContent.trim() || node.textContent.trim();
       const lozenge = node.querySelector('.smart-chip-lozenge')?.textContent.trim() || '';
       
+      // Clean preview suffix
+      title = title.replace(/\s*Preview$/i, '').trim();
+
       let label = title;
       if (icon) label = `${icon} ${label}`;
       if (lozenge) label = `${label} (${lozenge})`;
@@ -269,9 +418,14 @@
 
     // PREFORMATTED CODE BLOCKS
     if (tagName === 'pre') {
-      const lang = extractCodeLanguage(node);
+      let lang = extractCodeLanguage(node);
       const codeEl = node.querySelector('code') || node;
       const codeText = codeEl.textContent.replace(/\r\n/g, '\n');
+
+      // Label as text if it has box-drawing characters
+      if (!lang && /[─│┌┐└┘├┤┬┴►▼▲◄]/.test(codeText)) {
+        lang = 'text';
+      }
 
       // Defensive fence check in case code contains triple backticks
       let fence = '```';
@@ -279,16 +433,29 @@
         fence += '`';
       }
 
-      return `\n\n${fence}${lang}\n${codeText}\n${fence}\n\n`;
+      return `\n\n${fence}${lang}\n${codeText.trimEnd()}\n${fence}\n\n`;
     }
 
-    // INLINE CODE
+    // INLINE OR BLOCK CODE
     if (tagName === 'code') {
       if (state.inPre) {
         return node.textContent;
       }
       const codeText = node.textContent;
       if (!codeText) return '';
+
+      // If code contains newlines or box-drawing characters, format as a fenced block!
+      const isMultiLine = codeText.includes('\n');
+      const hasBoxDrawing = /[─│┌┐└┘├┤┬┴►▼▲◄]/.test(codeText);
+
+      if (isMultiLine || hasBoxDrawing) {
+        let fence = '```';
+        while (codeText.includes(fence)) {
+          fence += '`';
+        }
+        return `\n\n${fence}text\n${codeText.replace(/\r\n/g, '\n').trimEnd()}\n${fence}\n\n`;
+      }
+
       // If code contains backticks, use double backticks
       if (codeText.includes('`')) {
         return `\`\` ${codeText} \`\``;
@@ -337,7 +504,8 @@
     // LINKS
     if (tagName === 'a') {
       const href = node.getAttribute('href') || '';
-      const text = convertChildren(node, options, state).trim();
+      let text = convertChildren(node, options, state).trim();
+      text = text.replace(/\s*Preview$/i, '').trim();
       if (!href) return text;
       if (!text) return `[${href}](${href})`;
       return `[${text}](${href})`;
@@ -543,6 +711,67 @@
   }
 
   /**
+   * Post-process converted Markdown to fix formatting irregularities,
+   * unclosed bold tags, LaTeX tokens, preview text, and orphan dividers.
+   */
+  function postProcessMarkdown(md) {
+    if (!md) return '';
+
+    let out = md;
+
+    // 1. Sanitize unrendered LaTeX math tokens to clean Unicode symbols
+    out = out
+      .replace(/\$\s*\\rightarrow\s*\$/gi, '→')
+      .replace(/\\rightarrow\b/gi, '→')
+      .replace(/\$\s*\\leftarrow\s*\$/gi, '←')
+      .replace(/\\leftarrow\b/gi, '←')
+      .replace(/\$\s*\\Rightarrow\s*\$/gi, '⇒')
+      .replace(/\\Rightarrow\b/gi, '⇒')
+      .replace(/\$\s*\\times\s*\$/gi, '×')
+      .replace(/\\times\b/gi, '×')
+      .replace(/\$\s*\\le(q)?\s*\$/gi, '≤')
+      .replace(/\\le(q)?\b/gi, '≤')
+      .replace(/\$\s*\\ge(q)?\s*\$/gi, '≥')
+      .replace(/\\ge(q)?\b/gi, '≥')
+      .replace(/\\mathbf\{([^}]+)\}/g, '$1')
+      .replace(/\\text\{([^}]+)\}/g, '$1')
+      .replace(/\$\s*(\d+\s*×\s*£[0-9,.]+)\s*=\s*(£[0-9,.]+)\s*\$/g, '($1 = $2)')
+      .replace(/\$\s*Total\s*=\s*(£[0-9,.]+)\s*\$/g, '(Total = $1)')
+      .replace(/\$\s*([A-Za-z0-9\s\-–+=/£€$]+)\s*\$/g, '$1');
+
+    // 2. Fix broken split bold tags around parentheses / code / links:
+    // e.g., "**Retire Credit Files (**`CF`**)**" -> "**Retire Credit Files** (`CF`)"
+    // e.g., "**ATCOM Flight Booking (**`ATCOMRes`):**" -> "**ATCOM Flight Booking** (`ATCOMRes`):"
+    // e.g., "**Automated Handback API (**[Link](url)**):**" -> "**Automated Handback API** ([Link](url)):"
+    out = out
+      .replace(/\*\*([^*\n]+?)\s*\(\*\*\s*(`[^`]+`|\[[^\]]+\]\([^)]+\))\s*(?:\*\*\))?:?\*\*/g, (m, g1, g2) => m.includes(':') ? `**${g1}** (${g2}):` : `**${g1}** (${g2})`)
+      .replace(/\*\*([^*\n]+?)\s*\(\*\*\s*(`[^`]+`|\[[^\]]+\]\([^)]+\))\s*\)/g, '**$1** ($2)')
+      .replace(/\*\*([^*\n]+?)\s*\(\*\*/g, '**$1** (')
+      .replace(/\*\*\)\s*:\*\*/g, '):')
+      .replace(/\*\*\)\*\*/g, ')')
+      .replace(/\):?\*\*/g, (m) => m.includes(':') ? '):' : ')')
+      .replace(/\*\*\s*\*\*/g, '');
+
+    // 3. Clean trailing "Preview" from Markdown links (e.g. "[TitlePreview](url)" -> "[Title](url)")
+    out = out
+      .replace(/\[([^\]\n]+?)\s*Preview\]\(([^)]+)\)/gi, '[$1]($2)')
+      .replace(/\[([^\]\n]+?)\s*Preview\b([^\]\n]*?)\]\(([^)]+)\)/gi, '[$1$2]($3)');
+
+    // 4. Remove excessive / duplicate horizontal rules (especially right before or after headings)
+    out = out
+      .replace(/(?:\n\s*---\s*){2,}/g, '\n\n---\n\n')
+      .replace(/\n\s*---\s*\n+(\s*#{1,6}\s+)/g, '\n\n$1')
+      .replace(/(\s*#{1,6}\s+[^\n]+)\n+\s*---\s*\n/g, '$1\n\n');
+
+    // 5. Clean up leading/trailing dashes and multiple newlines
+    out = out
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+
+    return out;
+  }
+
+  /**
    * Public API: Convert structured chat conversation to Markdown document
    * 
    * @param {Object} chatData - { title, platform, url, messages: [{ role, html }] }
@@ -565,7 +794,6 @@
 
     const title = chatData.title || `${chatData.platform || 'AI'} Conversation`;
     const platform = chatData.platform || 'AI Assistant';
-    const sourceUrl = chatData.url || '';
     const exportDate = new Date().toLocaleDateString(undefined, {
       year: 'numeric',
       month: 'long',
@@ -576,30 +804,47 @@
 
     let doc = '';
 
-    // Document Frontmatter / Header
+    // Document Header - matches the clean PDF header
     doc += `# ${title}\n\n`;
-    doc += `> **Platform:** ${platform}  \n`;
-    doc += `> **Exported:** ${exportDate}  \n`;
-    if (sourceUrl) {
-      doc += `> **Source:** [${sourceUrl}](${sourceUrl})  \n`;
-    }
-    doc += '\n---\n\n';
+    doc += `**Source:** ${platform} &nbsp;|&nbsp; **Exported on:** ${exportDate}\n\n`;
+    doc += '---\n\n';
 
-    // Turns
+    // Process Conversation Turns
     const messages = chatData.messages || [];
     for (let i = 0; i < messages.length; i++) {
       const msg = messages[i];
       const isUser = msg.role === 'user';
-      const roleHeading = isUser ? '## 🧑 User' : '## 🤖 Assistant';
+      
+      let turnMd = htmlToMarkdown(msg.html, opts);
+      if (!turnMd || !turnMd.trim()) continue;
 
-      doc += `${roleHeading}\n\n`;
-      const turnMd = htmlToMarkdown(msg.html, opts);
-      doc += turnMd || '*(empty message)*';
-      doc += '\n\n---\n\n';
+      if (isUser) {
+        // Divider before next user turn if not first turn
+        if (i > 0) {
+          doc += '\n\n---\n\n';
+        }
+
+        // Format User Prompt as a themed card (blockquote with left accent line, matching PDF)
+        const isSingleLine = !turnMd.includes('\n') && turnMd.length < 200 && !turnMd.startsWith('#');
+        if (isSingleLine) {
+          // Single-line prompt: formatted in card heading style
+          doc += `> ### ${turnMd}\n\n`;
+        } else {
+          // Multi-block prompt: prefix lines with `> ` to render as unified card
+          const cardLines = turnMd
+            .split('\n')
+            .map(line => line.trim() ? `> ${line}` : '>')
+            .join('\n');
+          doc += `${cardLines}\n\n`;
+        }
+      } else {
+        // Assistant response follows directly (matching PDF layout without robotic role headers)
+        doc += `${turnMd}\n\n`;
+      }
     }
 
-    // Clean up trailing separators / newlines
-    doc = doc.replace(/\n{3,}/g, '\n\n').trim() + '\n';
+    // Run post-processing on entire document
+    doc = postProcessMarkdown(doc) + '\n';
 
     const safeFilename = sanitizeFilename(title, '.md');
 
@@ -613,6 +858,7 @@
   return {
     htmlToMarkdown,
     convertChatToMarkdown,
-    sanitizeFilename
+    sanitizeFilename,
+    postProcessMarkdown
   };
 });

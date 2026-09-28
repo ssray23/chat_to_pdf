@@ -192,8 +192,8 @@ describe('[FEATURE] Markdown (.md) Export Regression Suite', () => {
     });
   });
 
-  describe('Full Conversation Export and Metadata Generation', () => {
-    test('assembles complete document with title, platform, date, and user/assistant turns', () => {
+  describe('Full Conversation Export and PDF-Parity Formatting', () => {
+    test('assembles complete document with title, platform, date, and user prompt cards without robot emojis', () => {
       const chatData = {
         platform: 'Claude',
         title: 'Architectural Discussion',
@@ -208,13 +208,37 @@ describe('[FEATURE] Markdown (.md) Export Regression Suite', () => {
 
       expect(result.filename).toBe('Architectural_Discussion.md');
       expect(result.markdown).toContain('# Architectural Discussion');
-      expect(result.markdown).toContain('> **Platform:** Claude');
-      expect(result.markdown).toContain('> **Source:** [https://claude.ai/chat/12345](https://claude.ai/chat/12345)');
-      expect(result.markdown).toContain('## 🧑 User');
-      expect(result.markdown).toContain('Can we export as markdown?');
-      expect(result.markdown).toContain('## 🤖 Assistant');
+      expect(result.markdown).toContain('**Source:** Claude');
+      expect(result.markdown).not.toContain('🧑 User');
+      expect(result.markdown).not.toContain('🤖 Assistant');
+      expect(result.markdown).toContain('> ### Can we export as markdown?');
+      expect(result.markdown).toContain('Yes, absolutely! Here is why:');
       expect(result.markdown).toContain('- No margin clipping');
       expect(result.markdown).toContain('- Reflowable text');
+    });
+
+    test('preserves ASCII diagrams in fenced code blocks rather than single backticks', () => {
+      const diagramHtml = '<code>[Bulk Booking] ──► [eRes]\n │\n ▼</code>';
+      const md = htmlToMarkdown(diagramHtml);
+      expect(md).toContain('```text\n[Bulk Booking] ──► [eRes]\n │\n ▼\n```');
+    });
+
+    test('normalizes split bold formatting around inline code and links', () => {
+      const { postProcessMarkdown } = require('../../../md-converter');
+      expect(postProcessMarkdown('**Retire Credit Files (**`CF`**)**')).toBe('**Retire Credit Files** (`CF`)');
+      expect(postProcessMarkdown('**ATCOM Flight Booking (**`ATCOMRes`):**')).toBe('**ATCOM Flight Booking** (`ATCOMRes`):');
+      expect(postProcessMarkdown('**API (**[Link](http://example.com)**):**')).toBe('**API** ([Link](http://example.com)):');
+    });
+
+    test('cleans Preview suffix from Confluence and Jira links', () => {
+      const { postProcessMarkdown } = require('../../../md-converter');
+      expect(postProcessMarkdown('[Series Seating Solution Design DraftPreview](https://confluence.com/page)')).toBe('[Series Seating Solution Design Draft](https://confluence.com/page)');
+    });
+
+    test('replaces raw LaTeX math notation with clean Unicode symbols', () => {
+      const { postProcessMarkdown } = require('../../../md-converter');
+      const input = 'Gatwick $\\rightarrow$ Palma ($T - 12\\text{ Months}$)';
+      expect(postProcessMarkdown(input)).toBe('Gatwick → Palma (T - 12 Months)');
     });
 
     test('sanitizes filename removing illegal filesystem characters', () => {
