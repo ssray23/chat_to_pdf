@@ -93,10 +93,10 @@ When you click export:
 
 ### 2. High-Fidelity Markdown Engine (`md-converter.js`)
 The zero-dependency conversion engine converts DOM/HTML structures into clean GitHub-Flavored Markdown:
-- **Themed Prompt Cards**: Formats user prompts into blockquotes (`> ### ...` or multi-line `> `) separated by `---` dividers, matching the Typora theme's `#write blockquote` styling.
-- **GFM Tables**: Converts HTML tables to aligned pipe tables with normalized columns and escaped pipe characters.
+- **Bolded Prompt Cards**: Formats user prompts into prominent blockquotes (`> ### **<question>**` or multi-line `> `) separated by horizontal turn dividers (`---`), matching the Typora theme's `#write blockquote` styling.
+- **GFM Tables with Bold Parity Balancing**: Converts HTML tables to aligned pipe tables with normalized columns, escaped pipe characters, and automatic bold marker parity checks so table cell contents ending with parentheses (e.g. `**1. Bulk Purchase (120 seats)**`) always render fully bolded.
 - **ASCII Diagrams & Code Fences**: Preserves box-drawing characters (`[─│┌┐└┘├┤┬┴►▼▲◄]`) inside ```` ```text ... ``` ```` fences and strips line-number gutters.
-- **Clean Unicode Typography**: Replaces unrendered LaTeX math tokens (`\rightarrow` → `→`, `\times` → `×`) with standard Unicode characters and strips noisy `Preview` link suffixes.
+- **Clean Unicode Typography**: Replaces unrendered LaTeX math tokens (`\rightarrow` → `→`, `\times` → `×`, `\le` → `≤`, `\ge` → `≥`) with standard Unicode characters and strips noisy `Preview` link suffixes.
 
 ### 3. Image, Canvas, and Iframe Serialization
 To prevent media loading failures:
@@ -108,6 +108,25 @@ To prevent media loading failures:
 To guarantee a clean layout when printing or viewing:
 - Custom wrappers and cards are transparent to ensure zero gray background panels behind tables or text.
 - Specific Tag selectors restore backgrounds ONLY on core document elements: `#write th` (`#f9f9f9`), `#write tr:nth-child(even)` (`#f5f5f5`), code blocks (`#f8f8f8`), and blockquotes (`#f5f5f5`).
+
+---
+
+## Recent Fixes & Improvements
+
+1. **Prominent User Question Cards & Bolding ([md-converter.js](<./md-converter.js>)):**
+   - Single-line questions are formatted as prominent H3 card headings with explicit bolding (`> ### **<question>**`).
+   - Multi-paragraph prompts format the opening statement as `> ### **...**` and preserve bolding across all prompt paragraphs (`> **...**`).
+   - Clean horizontal dividers (`---`) separate each conversation turn for clear visual delineation.
+2. **Accurate Turn Role Classification on Atlassian Rovo ([content.js](<./content.js>)):**
+   - Removed platform name `rovo` from assistant exclusion regexes so user prompt containers with `rovo` attributes are not misclassified as assistant responses.
+   - Assistant turns in Rovo are deterministically identified by the presence of Atlaskit's `.ak-renderer-document`, while user turns are identified by blue bubble styling (`#0c66e4`), white text, and lack of `.ak-renderer-document`.
+3. **Closing Bold Asterisk Preservation in Tables ([md-converter.js](<./md-converter.js>)):**
+   - Replaced an overly aggressive closing-parenthesis regex (`\):?\*\*`) that previously stripped closing double asterisks from phrases like `**1. Bulk Purchase (120 seats)**`.
+   - Added automatic cell bold parity balancing in `convertTableNode` to ensure any unclosed bold tag in table cells is safely balanced before export.
+4. **Virtual Scroll Turn Sweep & Memory Snapshots ([content.js](<./content.js>)):**
+   - Added `collectTurns` to smoothly sweep virtualized chat scroll containers from top to bottom before scraping, snapshotting every turn into memory (`deepCloneWithShadowsAndSvgs`) so offscreen turns are never dropped.
+5. **Button Container Preservation ([content.js](<./content.js>)):**
+   - Preserves user prompts contained inside `<button>` or `role="button"` elements by converting them to clean `<div>` blocks instead of stripping them as action controls.
 
 ---
 
