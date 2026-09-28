@@ -243,6 +243,12 @@ describe('[FEATURE] Markdown (.md) Export Regression Suite', () => {
       expect(md).toContain('```text\n[Bulk Booking] ──► [eRes]\n │\n ▼\n```');
     });
 
+    test('preserves ASCII diagrams rendered inside p or div containers', () => {
+      const pDiagram = '<p>[Bulk Block Allocation] ───► Paid via Credit File<br> │<br> ▼<br>[Child PNRs]</p>';
+      const md = htmlToMarkdown(pDiagram);
+      expect(md).toContain('```text\n[Bulk Block Allocation] ───► Paid via Credit File\n │\n ▼\n[Child PNRs]\n```');
+    });
+
     test('normalizes split bold formatting around inline code and links', () => {
       const { postProcessMarkdown } = require('../../../md-converter');
       expect(postProcessMarkdown('**Retire Credit Files (**`CF`**)**')).toBe('**Retire Credit Files** (`CF`)');

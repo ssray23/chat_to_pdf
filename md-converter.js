@@ -304,6 +304,26 @@
   }
 
   /**
+   * Helper to extract text while preserving line breaks from br tags
+   */
+  function extractPreservedText(node) {
+    let text = '';
+    for (const c of (node.childNodes || [])) {
+      if (c.nodeType === 3 /* TEXT_NODE */) {
+        text += c.nodeValue || '';
+      } else if (c.nodeType === 1) {
+        const tag = c.tagName ? c.tagName.toLowerCase() : '';
+        if (tag === 'br') {
+          text += '\n';
+        } else {
+          text += extractPreservedText(c);
+        }
+      }
+    }
+    return text;
+  }
+
+  /**
    * Main recursive node converter
    */
   function convertNode(node, options, state) {
@@ -397,6 +417,31 @@
       const prefix = '#'.repeat(level);
       const inner = convertChildren(node, options, state).trim();
       return inner ? `\n\n${prefix} ${inner}\n\n` : '';
+    }
+
+    // ASCII / Box-drawing Diagram inside paragraph or generic block
+    if ((tagName === 'p' || tagName === 'div') && /[─│┌┐└┘├┤┬┴►▼▲◄]/.test(node.textContent) && (node.textContent.includes('\n') || node.querySelector('br'))) {
+      const text = extractPreservedText(node).replace(/\r\n/g, '\n').trimEnd();
+      let fence = '```';
+      while (text.includes(fence)) fence += '`';
+      return `\n\n${fence}text\n${text}\n${fence}\n\n`;
+    }
+
+    // Special / Preformatted Containers (div with code-block or data-node-type="codeBlock")
+    if ((tagName === 'div' || tagName === 'section') && (
+      node.getAttribute('data-node-type') === 'codeBlock' || 
+      node.classList.contains('ak-renderer-code-block') || 
+      node.classList.contains('code-block')
+    )) {
+      const preEl = node.querySelector('pre');
+      if (preEl) {
+        return convertNode(preEl, options, state);
+      }
+      const codeText = node.textContent.replace(/\r\n/g, '\n');
+      let lang = node.getAttribute('data-language') || (/[─│┌┐└┘├┤┬┴►▼▲◄]/.test(codeText) ? 'text' : '');
+      let fence = '```';
+      while (codeText.includes(fence)) fence += '`';
+      return `\n\n${fence}${lang}\n${codeText.trimEnd()}\n${fence}\n\n`;
     }
 
     // PARAGRAPHS

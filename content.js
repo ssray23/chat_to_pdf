@@ -1052,6 +1052,7 @@ function classifyTurnRole(el, index = 0, totalTurns = 1) {
   if (tagName === 'model-response') return 'assistant';
   if (el.querySelector('[data-message-author-role="user"]')) return 'user';
   if (el.querySelector('[data-message-author-role="assistant"]')) return 'assistant';
+  if (el.classList.contains('ak-renderer-document') || el.querySelector('.ak-renderer-document')) return 'assistant';
 
   // 2. Class & TestID semantic markers (+/- 6)
   if (/\b(user|human|query|prompt|sent|user-message)\b/.test(className) || /\b(user|human|query|prompt)\b/.test(testId)) {
@@ -1259,39 +1260,68 @@ function extractAdaptiveTurns(root = document.body) {
   return extracted;
 }
 
+// Helper to find the actual scrollable conversation container
+function findChatScrollContainer() {
+  // 1. Walk up from any rendered message or document
+  const sample = document.querySelector(
+    '.ak-renderer-document, [data-testid*="message" i], [class*="message" i], [class*="bubble" i], [data-testid*="user-message" i]'
+  );
+  if (sample) {
+    let p = sample.parentElement;
+    while (p && p !== document.body && p !== document.documentElement) {
+      const style = window.getComputedStyle(p);
+      const ov = style.overflowY || style.overflow;
+      if (/(auto|scroll)/.test(ov) && p.scrollHeight > p.clientHeight + 40) {
+        return p;
+      }
+      p = p.parentElement;
+    }
+  }
+
+  // 2. Scan all block elements with scrollable overflow
+  const candidates = Array.from(document.querySelectorAll('div, main, section'));
+  let best = null;
+  let maxDiff = 0;
+  for (const el of candidates) {
+    const diff = el.scrollHeight - el.clientHeight;
+    if (diff > maxDiff && el.clientHeight > 150) {
+      const style = window.getComputedStyle(el);
+      const ov = style.overflowY || style.overflow;
+      if (/(auto|scroll)/.test(ov)) {
+        best = el;
+        maxDiff = diff;
+      }
+    }
+  }
+  return best || document.scrollingElement || document.documentElement;
+}
+
 // Ensure any virtualized or lazy-loaded turns are loaded into the DOM before scraping
 async function ensureFullConversationLoaded(platform) {
   try {
-    const scrollContainers = [
-      document.querySelector('[data-testid*="chat-scroll" i]'),
-      document.querySelector('[data-testid*="message-list" i]'),
-      document.querySelector('[class*="ScrollContainer" i]'),
-      document.querySelector('[class*="message-list" i]'),
-      document.querySelector('[class*="chat-history" i]'),
-      document.querySelector('main [class*="overflow-y-auto" i]'),
-      document.querySelector('main'),
-      document.scrollingElement || document.documentElement
-    ].filter(Boolean);
-
-    const scrollContainer = scrollContainers.find(c => c.scrollHeight > c.clientHeight + 80);
+    const scrollContainer = findChatScrollContainer();
     if (!scrollContainer) return;
 
-    // Check if the container is scrolled down and might have unloaded earlier turns
-    const currentScroll = scrollContainer === document.documentElement ? window.scrollY : scrollContainer.scrollTop;
-    if (currentScroll > 50) {
+    const isDoc = scrollContainer === document.documentElement || scrollContainer === document.body;
+    let currentScroll = isDoc ? window.scrollY : scrollContainer.scrollTop;
+
+    // If container is scrolled down, scroll up to trigger loading earlier messages
+    if (currentScroll > 40) {
       let attempts = 0;
       let prevHeight = scrollContainer.scrollHeight;
-      
-      while (attempts < 8) {
-        if (scrollContainer === document.documentElement) {
+
+      while (attempts < 15) {
+        if (isDoc) {
           window.scrollTo({ top: 0, behavior: 'instant' });
         } else {
           scrollContainer.scrollTop = 0;
         }
 
-        await new Promise(r => setTimeout(r, 180));
+        await new Promise(r => setTimeout(r, 220));
+
         const newHeight = scrollContainer.scrollHeight;
-        if (newHeight === prevHeight && (scrollContainer === document.documentElement ? window.scrollY : scrollContainer.scrollTop) <= 0) {
+        const nowScroll = isDoc ? window.scrollY : scrollContainer.scrollTop;
+        if (newHeight === prevHeight && nowScroll <= 0) {
           break;
         }
         prevHeight = newHeight;
@@ -1399,18 +1429,29 @@ async function getChatMessages(platform) {
       return false;
     };
 
-    let turns = Array.from(document.querySelectorAll(
-      '[data-testid*="user-message" i], [data-testid*="assistant-message" i], [data-testid*="rovo-message" i], [data-testid*="agent-message" i], ' +
-      'div[class*="UserMessage" i], div[class*="AgentMessage" i], div[class*="AssistantMessage" i], div[class*="RovoMessage" i], ' +
-      'div[class*="user-message" i], div[class*="agent-message" i], div[class*="assistant-message" i]'
-    )).filter(el => !isComposerOrToolbar(el));
+    const rovoSelectors = [
+      '[data-testid="chat-message"]:not([data-testid*="list"]):not([data-testid*="scroll"])',
+      '[data-testid*="message-item" i]',
+      'div[class*="MessageRow" i]',
+      'div[class*="message-row" i]',
+      'div[class*="ChatMessage" i]',
+      'div[class*="chat-message" i]',
+      '[data-testid*="user-message" i]',
+      'div[class*="UserMessage" i]',
+      'div[class*="user-message" i]',
+      'div[class*="bubble" i]',
+      '.ak-renderer-document',
+      '[data-testid*="assistant-message" i]',
+      '[data-testid*="rovo-message" i]',
+      '[data-testid*="agent-message" i]',
+      'div[class*="AgentMessage" i]',
+      'div[class*="AssistantMessage" i]',
+      'div[class*="RovoMessage" i]',
+      'div[class*="agent-message" i]',
+      'div[class*="assistant-message" i]'
+    ].join(', ');
 
-    if (turns.length === 0) {
-      turns = Array.from(document.querySelectorAll(
-        '[data-testid="chat-message"]:not([data-testid*="list"]):not([data-testid*="scroll"]), [data-testid*="message-item" i], .ak-renderer-document, ' +
-        'div[class*="message" i]:not([class*="list"]):not([class*="container"]):not([class*="composer"]):not([class*="toolbar"]), div[class*="bubble" i]'
-      )).filter(el => !isComposerOrToolbar(el));
-    }
+    let turns = Array.from(document.querySelectorAll(rovoSelectors)).filter(el => !isComposerOrToolbar(el));
     turns = getUniqueElements(turns).filter(el => !isComposerOrToolbar(el));
 
     for (let i = 0; i < turns.length; i++) {
