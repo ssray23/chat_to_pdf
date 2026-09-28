@@ -685,6 +685,12 @@
           .replace(/\|/g, '\\|')
           .trim();
 
+        // Ensure unbalanced bold asterisks inside table cells are closed
+        const starCount = (cellText.match(/\*\*/g) || []).length;
+        if (starCount % 2 === 1) {
+          cellText += '**';
+        }
+
         rowData.push(cellText || ' ');
 
         // Determine column alignment from first row or header row
@@ -808,13 +814,13 @@
     // e.g., "**ATCOM Flight Booking (**`ATCOMRes`):**" -> "**ATCOM Flight Booking** (`ATCOMRes`):"
     // e.g., "**Automated Handback API (**[Link](url)**):**" -> "**Automated Handback API** ([Link](url)):"
     out = out
-      .replace(/\*\*([^*\n]+?)\s*\(\*\*\s*(`[^`]+`|\[[^\]]+\]\([^)]+\))\s*(?:\*\*\))?:?\*\*/g, (m, g1, g2) => m.includes(':') ? `**${g1}** (${g2}):` : `**${g1}** (${g2})`)
+      .replace(/\*\*([^*\n]+?)\s*\(\*\*\s*(`[^`]+`|\[[^\]]+\]\([^)]+\))\s*\*\*\)\s*(:?)\*\*/g, (m, g1, g2, col) => col ? `**${g1}** (${g2}):` : `**${g1}** (${g2})`)
+      .replace(/\*\*([^*\n]+?)\s*\(\*\*\s*(`[^`]+`|\[[^\]]+\]\([^)]+\))\s*\):?\*\*/g, (m, g1, g2) => m.includes(':') ? `**${g1}** (${g2}):` : `**${g1}** (${g2})`)
       .replace(/\*\*([^*\n]+?)\s*\(\*\*\s*(`[^`]+`|\[[^\]]+\]\([^)]+\))\s*\)/g, '**$1** ($2)')
-      .replace(/\*\*([^*\n]+?)\s*\(\*\*/g, '**$1** (')
-      .replace(/\*\*\)\s*:\*\*/g, '):')
-      .replace(/\*\*\)\*\*/g, ')')
-      .replace(/\):?\*\*/g, (m) => m.includes(':') ? '):' : ')')
       .replace(/\*\*\s*\*\*/g, '');
+
+    // 2b. Repair any unclosed bold markers inside table cells (| **text | -> | **text** |)
+    out = out.replace(/(\| *)\*\*([^*|\n]+?)( *\|)/g, '$1**$2**$3');
 
     // 3. Clean trailing "Preview" from Markdown links (e.g. "[TitlePreview](url)" -> "[Title](url)")
     out = out

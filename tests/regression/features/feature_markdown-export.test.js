@@ -321,6 +321,24 @@ describe('[FEATURE] Markdown (.md) Export Regression Suite', () => {
       expect(result.markdown).toContain('> ### **what is dedicated form of payment FOP**');
       expect(result.markdown).toContain('FOP is an official method.');
     });
+
+    test('preserves closing bold asterisks on bold items ending with parentheses in table cells', () => {
+      const tableHtml = `
+        <table>
+          <tr><th>Step in Lifecycle</th><th>Target FOP</th></tr>
+          <tr><td><strong>1. Bulk Purchase (120 seats)</strong></td><td>Direct record</td></tr>
+          <tr><td><strong>2. Split to Family PNR (4 seats)</strong></td><td>Native lineage</td></tr>
+          <tr><td><strong>3. Handback (10 unsold seats)</strong></td><td>Intercompany note</td></tr>
+          <tr><td><strong>4. Flight Departs</strong></td><td>Automated flown</td></tr>
+        </table>
+      `;
+
+      const md = htmlToMarkdown(tableHtml);
+      expect(md).toContain('| **1. Bulk Purchase (120 seats)** |');
+      expect(md).toContain('| **2. Split to Family PNR (4 seats)** |');
+      expect(md).toContain('| **3. Handback (10 unsold seats)** |');
+      expect(md).toContain('| **4. Flight Departs** |');
+    });
   });
 
 });
