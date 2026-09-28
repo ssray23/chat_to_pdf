@@ -40,6 +40,7 @@ const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
 const requiredFiles = [
   'manifest.json',
   'content.js',
+  'md-converter.js',
   'print.html',
   'print.js',
   'print.css',

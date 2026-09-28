@@ -1,0 +1,618 @@
+/**
+ * HTML to Markdown Converter Engine for AI Chat Exporter
+ * 
+ * Accurately translates sanitized conversation HTML from Claude, ChatGPT, Gemini,
+ * Perplexity, Grok, and Rovo into clean, GitHub-Flavored Markdown (GFM).
+ * Preserves code blocks, language tags, tables, math, lists, links, and media.
+ */
+
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) {
+    // CommonJS / Node.js
+    module.exports = factory();
+  } else {
+    // Browser global
+    root.MDConverter = factory();
+  }
+})(typeof self !== 'undefined' ? self : this, function () {
+
+  /**
+   * Helper to parse HTML string into a DOM element or document
+   */
+  function parseHTML(html) {
+    if (typeof window !== 'undefined' && window.DOMParser) {
+      const parser = new window.DOMParser();
+      const doc = parser.parseFromString(html, 'text/html');
+      return doc.body;
+    } else if (typeof document !== 'undefined') {
+      const container = document.createElement('div');
+      container.innerHTML = html;
+      return container;
+    } else {
+      // Node.js fallback with jsdom
+      try {
+        const { JSDOM } = require('jsdom');
+        const dom = new JSDOM(html);
+        return dom.window.document.body;
+      } catch (e) {
+        throw new Error('JSDOM required for server-side HTML parsing');
+      }
+    }
+  }
+
+  /**
+   * Sanitize a string for safe filesystem filename
+   */
+  function sanitizeFilename(title, ext = '.md') {
+    if (!title || typeof title !== 'string') {
+      title = 'AI_Conversation';
+    }
+    // Trim whitespace first
+    let sanitized = title.trim();
+
+    // Remove invalid filesystem chars: \ / : * ? " < > |
+    sanitized = sanitized
+      .replace(/[\\/:*?"<>|]+/g, '_')
+      .replace(/\s+/g, '_')
+      .replace(/^[._]+/, '')
+      .replace(/[._]+$/, '');
+
+    if (!sanitized) sanitized = 'AI_Conversation';
+    if (sanitized.length > 80) sanitized = sanitized.slice(0, 80);
+
+    return sanitized + (ext.startsWith('.') ? ext : `.${ext}`);
+  }
+
+  /**
+   * Determine image extension from data URL mime type
+   */
+  function getImageExtension(dataUrl) {
+    if (!dataUrl) return 'png';
+    const match = dataUrl.match(/^data:image\/([a-zA-Z0-9+]+);/);
+    if (!match) return 'png';
+    const sub = match[1].toLowerCase();
+    if (sub.includes('jpeg') || sub.includes('jpg')) return 'jpg';
+    if (sub.includes('svg')) return 'svg';
+    if (sub.includes('gif')) return 'gif';
+    if (sub.includes('webp')) return 'webp';
+    return 'png';
+  }
+
+  /**
+   * Extract LaTeX math formula from KaTeX or MathJax element
+   */
+  function extractMathFormula(el) {
+    // KaTeX annotation
+    const annotation = el.querySelector('annotation[encoding="application/x-tex"], annotation[encoding*="tex"]');
+    if (annotation && annotation.textContent.trim()) {
+      return annotation.textContent.trim();
+    }
+    // MathJax script tag
+    const mathJaxScript = el.querySelector('script[type*="math/tex"]');
+    if (mathJaxScript && mathJaxScript.textContent.trim()) {
+      return mathJaxScript.textContent.trim();
+    }
+    // data-math or data-tex attribute
+    const dataMath = el.getAttribute('data-math') || el.getAttribute('data-tex') || el.getAttribute('alt');
+    if (dataMath && dataMath.trim()) {
+      return dataMath.trim();
+    }
+    return '';
+  }
+
+  /**
+   * Check if an element represents display/block math vs inline math
+   */
+  function isDisplayMath(el) {
+    if (el.classList.contains('katex-display') || el.classList.contains('MathJax_Display')) {
+      return true;
+    }
+    if (el.tagName.toLowerCase() === 'div' && el.querySelector('.katex-display')) {
+      return true;
+    }
+    if (el.getAttribute('display') === 'block') {
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Extract code block language from code/pre elements or surrounding pills
+   */
+  function extractCodeLanguage(preEl) {
+    // 1. Check code child for class="language-xyz" or class="lang-xyz"
+    const codeEl = preEl.querySelector('code');
+    if (codeEl) {
+      for (const cls of codeEl.classList) {
+        const m = cls.match(/^(?:language|lang)-([a-zA-Z0-9+#.-]+)$/i);
+        if (m) return m[1].toLowerCase();
+      }
+      const dataLang = codeEl.getAttribute('data-language') || codeEl.getAttribute('data-lang');
+      if (dataLang) return dataLang.trim().toLowerCase();
+    }
+
+    // 2. Check pre element itself for language class or data-language
+    for (const cls of preEl.classList) {
+      const m = cls.match(/^(?:language|lang)-([a-zA-Z0-9+#.-]+)$/i);
+      if (m) return m[1].toLowerCase();
+    }
+    const preDataLang = preEl.getAttribute('data-language') || preEl.getAttribute('data-lang');
+    if (preDataLang) return preDataLang.trim().toLowerCase();
+
+    // 3. Check for previous sibling language pill (.code-language-pill)
+    let sibling = preEl.previousElementSibling;
+    for (let i = 0; i < 2 && sibling; i++) {
+      if (sibling.classList.contains('code-language-pill') || sibling.classList.contains('code-language-pill-wrapper')) {
+        const text = sibling.textContent.trim().toLowerCase();
+        if (text && /^[a-z0-9+#.-]{1,15}$/i.test(text)) return text;
+      }
+      sibling = sibling.previousElementSibling;
+    }
+
+    // 4. Check parent's previous sibling
+    const parent = preEl.parentElement;
+    if (parent && parent.previousElementSibling) {
+      const pSib = parent.previousElementSibling;
+      if (pSib.classList.contains('code-language-pill') || pSib.classList.contains('code-language-pill-wrapper')) {
+        const text = pSib.textContent.trim().toLowerCase();
+        if (text && /^[a-z0-9+#.-]{1,15}$/i.test(text)) return text;
+      }
+    }
+
+    return '';
+  }
+
+  /**
+   * Main recursive node converter
+   */
+  function convertNode(node, options, state) {
+    if (!node) return '';
+
+    // TEXT NODE
+    if (node.nodeType === 3 /* Node.TEXT_NODE */) {
+      let text = node.nodeValue || '';
+      // Inside pre/code, keep exact text
+      if (state.inPre) return text;
+      // Normal text: collapse multiple spaces/newlines
+      return text.replace(/[\r\n\t]+/g, ' ');
+    }
+
+    // COMMENT OR NON-ELEMENT NODE
+    if (node.nodeType !== 1 /* Node.ELEMENT_NODE */) {
+      return '';
+    }
+
+    const tagName = node.tagName.toLowerCase();
+
+    // Ignore non-content elements
+    if (['script', 'style', 'noscript', 'template', 'svg'].includes(tagName)) {
+      // SVGs inside sources or icons are ignored
+      return '';
+    }
+
+    // Special Element: Atlassian Sources Pill
+    if (node.classList.contains('atlassian-sources-pill')) {
+      const text = node.textContent.trim();
+      return text ? `\n\n📎 **${text}**\n\n` : '';
+    }
+
+    // Special Element: Rovo Suggested Prompt
+    if (node.classList.contains('rovo-suggested-prompt')) {
+      const text = node.textContent.replace(/^[↳⤷\s]+/, '').trim();
+      return text ? `\n\n> ↳ *${text}*\n\n` : '';
+    }
+
+    // Special Element: Atlassian Smart Chip / Jira Issue
+    if (node.classList.contains('atlassian-smart-chip')) {
+      const href = node.getAttribute('href') || '#';
+      const icon = node.querySelector('.smart-chip-icon')?.textContent.trim() || '';
+      const title = node.querySelector('.smart-chip-title')?.textContent.trim() || node.textContent.trim();
+      const lozenge = node.querySelector('.smart-chip-lozenge')?.textContent.trim() || '';
+      
+      let label = title;
+      if (icon) label = `${icon} ${label}`;
+      if (lozenge) label = `${label} (${lozenge})`;
+      
+      return `[${label}](${href})`;
+    }
+
+    // Special Element: Media Card (.ai-exporter-media-card)
+    if (node.classList.contains('ai-exporter-media-card')) {
+      const img = node.querySelector('img');
+      const caption = node.querySelector('.ai-exporter-media-caption')?.textContent.trim() || (img?.alt || '');
+      let md = '';
+      if (img) {
+        md = convertImageNode(img, caption, options);
+      }
+      if (caption && caption !== 'Image attachment') {
+        md += `\n\n*${caption}*`;
+      }
+      return `\n\n${md}\n\n`;
+    }
+
+    // Special Element: KaTeX / MathJax Math Formula
+    if (node.classList.contains('katex') || node.classList.contains('MathJax') || node.hasAttribute('data-math')) {
+      const formula = extractMathFormula(node);
+      if (formula) {
+        if (isDisplayMath(node)) {
+          return `\n\n$$\n${formula}\n$$\n\n`;
+        } else {
+          return `$${formula}$`;
+        }
+      }
+    }
+
+    // HEADINGS
+    if (/^h[1-6]$/.test(tagName)) {
+      const level = parseInt(tagName[1], 10);
+      const prefix = '#'.repeat(level);
+      const inner = convertChildren(node, options, state).trim();
+      return inner ? `\n\n${prefix} ${inner}\n\n` : '';
+    }
+
+    // PARAGRAPHS
+    if (tagName === 'p') {
+      const inner = convertChildren(node, options, state).trim();
+      return inner ? `\n\n${inner}\n\n` : '';
+    }
+
+    // BLOCKQUOTES
+    if (tagName === 'blockquote') {
+      const inner = convertChildren(node, options, state).trim();
+      if (!inner) return '';
+      const quoted = inner
+        .split('\n')
+        .map(line => `> ${line}`)
+        .join('\n');
+      return `\n\n${quoted}\n\n`;
+    }
+
+    // PREFORMATTED CODE BLOCKS
+    if (tagName === 'pre') {
+      const lang = extractCodeLanguage(node);
+      const codeEl = node.querySelector('code') || node;
+      const codeText = codeEl.textContent.replace(/\r\n/g, '\n');
+
+      // Defensive fence check in case code contains triple backticks
+      let fence = '```';
+      while (codeText.includes(fence)) {
+        fence += '`';
+      }
+
+      return `\n\n${fence}${lang}\n${codeText}\n${fence}\n\n`;
+    }
+
+    // INLINE CODE
+    if (tagName === 'code') {
+      if (state.inPre) {
+        return node.textContent;
+      }
+      const codeText = node.textContent;
+      if (!codeText) return '';
+      // If code contains backticks, use double backticks
+      if (codeText.includes('`')) {
+        return `\`\` ${codeText} \`\``;
+      }
+      return `\`${codeText}\``;
+    }
+
+    // STRONG / BOLD
+    if (tagName === 'strong' || tagName === 'b') {
+      const inner = convertChildren(node, options, state);
+      if (!inner.trim()) return inner;
+      // Preserve leading and trailing spaces outside the asterisks
+      const leadingSpace = inner.match(/^\s*/)[0];
+      const trailingSpace = inner.match(/\s*$/)[0];
+      return `${leadingSpace}**${inner.trim()}**${trailingSpace}`;
+    }
+
+    // EMPHASIS / ITALIC
+    if (tagName === 'em' || tagName === 'i') {
+      const inner = convertChildren(node, options, state);
+      if (!inner.trim()) return inner;
+      const leadingSpace = inner.match(/^\s*/)[0];
+      const trailingSpace = inner.match(/\s*$/)[0];
+      return `${leadingSpace}*${inner.trim()}*${trailingSpace}`;
+    }
+
+    // STRIKETHROUGH
+    if (tagName === 'del' || tagName === 's' || tagName === 'strike') {
+      const inner = convertChildren(node, options, state);
+      if (!inner.trim()) return inner;
+      const leadingSpace = inner.match(/^\s*/)[0];
+      const trailingSpace = inner.match(/\s*$/)[0];
+      return `${leadingSpace}~~${inner.trim()}~~${trailingSpace}`;
+    }
+
+    // HORIZONTAL RULE
+    if (tagName === 'hr') {
+      return '\n\n---\n\n';
+    }
+
+    // LINE BREAK
+    if (tagName === 'br') {
+      return '  \n';
+    }
+
+    // LINKS
+    if (tagName === 'a') {
+      const href = node.getAttribute('href') || '';
+      const text = convertChildren(node, options, state).trim();
+      if (!href) return text;
+      if (!text) return `[${href}](${href})`;
+      return `[${text}](${href})`;
+    }
+
+    // IMAGES
+    if (tagName === 'img') {
+      const alt = node.getAttribute('alt') || 'Image';
+      return convertImageNode(node, alt, options);
+    }
+
+    // LISTS (ul, ol)
+    if (tagName === 'ul' || tagName === 'ol') {
+      const isOrdered = tagName === 'ol';
+      const startAttr = parseInt(node.getAttribute('start'), 10);
+      let listIndex = !isNaN(startAttr) ? startAttr : 1;
+      const listDepth = state.listDepth || 0;
+      const indent = '  '.repeat(listDepth);
+
+      let result = '\n';
+      const childNodes = Array.from(node.children);
+
+      for (const child of childNodes) {
+        if (child.tagName && child.tagName.toLowerCase() === 'li') {
+          // Check for task list checkboxes
+          let itemPrefix = isOrdered ? `${listIndex}. ` : '- ';
+          listIndex++;
+
+          // Check if item starts with checkbox or task marker
+          const chk = child.querySelector('input[type="checkbox"]');
+          if (chk) {
+            itemPrefix = chk.checked ? '- [x] ' : '- [ ] ';
+          }
+
+          const nextState = Object.assign({}, state, { listDepth: listDepth + 1 });
+          const itemText = convertChildren(child, options, nextState).trim();
+          
+          if (itemText) {
+            // Indent any multi-line content inside the list item
+            const indented = itemText
+              .split('\n')
+              .map((line, idx) => (idx === 0 ? line : `${indent}  ${line}`))
+              .join('\n');
+            result += `${indent}${itemPrefix}${indented}\n`;
+          }
+        }
+      }
+      return `${result}\n`;
+    }
+
+    // TABLES
+    if (tagName === 'table') {
+      return convertTableNode(node, options, state);
+    }
+
+    // GENERIC CONTAINERS (div, span, section, article, etc.)
+    return convertChildren(node, options, state);
+  }
+
+  /**
+   * Helper to convert an image node, supporting sidecar image extraction
+   */
+  function convertImageNode(imgNode, altText, options) {
+    let src = imgNode.getAttribute('src') || '';
+    if (!src) return '';
+
+    altText = altText || imgNode.getAttribute('alt') || 'Image';
+    // Clean newlines from alt text
+    altText = altText.replace(/[\r\n]+/g, ' ').trim();
+
+    // Check if image extraction is enabled and image is base64 data URL
+    if (options && options.extractImages && Array.isArray(options.images) && src.startsWith('data:image/')) {
+      const ext = getImageExtension(src);
+      const imgIndex = options.images.length + 1;
+      const padNum = String(imgIndex).padStart(3, '0');
+      const filename = `image_${padNum}.${ext}`;
+
+      options.images.push({
+        filename,
+        dataUrl: src,
+        alt: altText
+      });
+
+      // Reference via relative sidecar path
+      const imgPath = options.imageFolder ? `${options.imageFolder}/${filename}` : `./images/${filename}`;
+      return `![${altText}](${imgPath})`;
+    }
+
+    return `![${altText}](${src})`;
+  }
+
+  /**
+   * Convert an HTML <table> node to a GFM Markdown pipe table
+   */
+  function convertTableNode(tableNode, options, state) {
+    const rows = Array.from(tableNode.querySelectorAll('tr'));
+    if (rows.length === 0) return '';
+
+    const matrix = [];
+    const alignments = [];
+
+    // Extract all rows and cells
+    for (let r = 0; r < rows.length; r++) {
+      const tr = rows[r];
+      const cells = Array.from(tr.querySelectorAll('th, td'));
+      const rowData = [];
+
+      for (let c = 0; c < cells.length; c++) {
+        const cell = cells[c];
+        // Convert cell contents, replace newlines with <br>, escape pipes
+        let cellText = convertChildren(cell, options, state)
+          .replace(/[\r\n]+/g, ' ')
+          .replace(/\|/g, '\\|')
+          .trim();
+
+        rowData.push(cellText || ' ');
+
+        // Determine column alignment from first row or header row
+        if (r === 0 || alignments.length <= c) {
+          const alignAttr = cell.getAttribute('align') || cell.style.textAlign || '';
+          if (alignAttr.includes('center')) {
+            alignments[c] = ':---:';
+          } else if (alignAttr.includes('right')) {
+            alignments[c] = '---:';
+          } else {
+            alignments[c] = ':---';
+          }
+        }
+      }
+      if (rowData.length > 0) {
+        matrix.push(rowData);
+      }
+    }
+
+    if (matrix.length === 0) return '';
+
+    // Normalize column counts
+    let maxCols = 0;
+    matrix.forEach(row => { if (row.length > maxCols) maxCols = row.length; });
+    matrix.forEach(row => {
+      while (row.length < maxCols) row.push(' ');
+    });
+    while (alignments.length < maxCols) {
+      alignments.push(':---');
+    }
+
+    // Check if the first row is a real header (contains <th> or in <thead>)
+    const firstRowHasTh = rows[0] && rows[0].querySelector('th') !== null;
+    let headerRow = matrix[0];
+    let bodyRows = matrix.slice(1);
+
+    if (!firstRowHasTh && matrix.length === 1) {
+      // Single row table without <th> - synthesize header
+      headerRow = matrix[0].map(() => ' ');
+      bodyRows = [matrix[0]];
+    }
+
+    // Build GFM table string
+    let out = '\n\n';
+    out += `| ${headerRow.join(' | ')} |\n`;
+    out += `| ${alignments.slice(0, maxCols).join(' | ')} |\n`;
+
+    for (const bRow of bodyRows) {
+      out += `| ${bRow.join(' | ')} |\n`;
+    }
+    out += '\n';
+
+    return out;
+  }
+
+  /**
+   * Helper to convert all children of a node
+   */
+  function convertChildren(node, options, state) {
+    let result = '';
+    const children = node.childNodes;
+    for (let i = 0; i < children.length; i++) {
+      result += convertNode(children[i], options, state);
+    }
+    return result;
+  }
+
+  /**
+   * Public API: Convert HTML string or DOM node to Markdown
+   */
+  function htmlToMarkdown(htmlOrNode, options = {}) {
+    if (!htmlOrNode) return '';
+    let rootEl;
+    if (typeof htmlOrNode === 'object' && htmlOrNode.nodeType) {
+      rootEl = htmlOrNode;
+    } else if (typeof htmlOrNode === 'string') {
+      rootEl = parseHTML(htmlOrNode);
+    } else {
+      return '';
+    }
+    const state = { inPre: false, listDepth: 0 };
+    const md = convertChildren(rootEl, options, state);
+    
+    // Normalize excess blank lines (max 2 consecutive newlines)
+    return md
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+  }
+
+  /**
+   * Public API: Convert structured chat conversation to Markdown document
+   * 
+   * @param {Object} chatData - { title, platform, url, messages: [{ role, html }] }
+   * @param {Object} options - { extractImages: true, imageFolder: './images' }
+   * @returns {Object} - { markdown: string, images: Array<{ filename, dataUrl, alt }>, filename: string }
+   */
+  function convertChatToMarkdown(chatData, options = {}) {
+    if (!chatData) {
+      throw new Error('chatData is required');
+    }
+
+    const opts = Object.assign({
+      extractImages: true,
+      imageFolder: './images'
+    }, options);
+
+    // Track collected images during conversion
+    const collectedImages = [];
+    opts.images = collectedImages;
+
+    const title = chatData.title || `${chatData.platform || 'AI'} Conversation`;
+    const platform = chatData.platform || 'AI Assistant';
+    const sourceUrl = chatData.url || '';
+    const exportDate = new Date().toLocaleDateString(undefined, {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+
+    let doc = '';
+
+    // Document Frontmatter / Header
+    doc += `# ${title}\n\n`;
+    doc += `> **Platform:** ${platform}  \n`;
+    doc += `> **Exported:** ${exportDate}  \n`;
+    if (sourceUrl) {
+      doc += `> **Source:** [${sourceUrl}](${sourceUrl})  \n`;
+    }
+    doc += '\n---\n\n';
+
+    // Turns
+    const messages = chatData.messages || [];
+    for (let i = 0; i < messages.length; i++) {
+      const msg = messages[i];
+      const isUser = msg.role === 'user';
+      const roleHeading = isUser ? '## 🧑 User' : '## 🤖 Assistant';
+
+      doc += `${roleHeading}\n\n`;
+      const turnMd = htmlToMarkdown(msg.html, opts);
+      doc += turnMd || '*(empty message)*';
+      doc += '\n\n---\n\n';
+    }
+
+    // Clean up trailing separators / newlines
+    doc = doc.replace(/\n{3,}/g, '\n\n').trim() + '\n';
+
+    const safeFilename = sanitizeFilename(title, '.md');
+
+    return {
+      markdown: doc,
+      images: collectedImages,
+      filename: safeFilename
+    };
+  }
+
+  return {
+    htmlToMarkdown,
+    convertChatToMarkdown,
+    sanitizeFilename
+  };
+});

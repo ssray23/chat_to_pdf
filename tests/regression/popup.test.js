@@ -30,6 +30,7 @@ describe('Popup Platform Auto-Detection & Messaging Regression Suite', () => {
   test('popup UI components must render correctly', () => {
     document.body.innerHTML = popupHtml;
     expect(document.getElementById('status-card')).not.toBeNull();
+    expect(document.getElementById('btn-export-md')).not.toBeNull();
     expect(document.getElementById('btn-export')).not.toBeNull();
     expect(document.getElementById('status-title')).not.toBeNull();
   });
@@ -37,42 +38,49 @@ describe('Popup Platform Auto-Detection & Messaging Regression Suite', () => {
   test('auto-detects Claude platform from active tab URL', async () => {
     await runPopupScriptWithMockTab('https://claude.ai/chat/abc');
     expect(document.getElementById('status-title').textContent).toContain('Claude Chat Detected');
-    expect(document.getElementById('btn-export').disabled).toBe(false);
+    expect(document.getElementById('btn-export-md').disabled).toBe(false);
+    expect(document.getElementById('btn-export').disabled).toBe(true);
   });
 
   test('auto-detects ChatGPT platform from active tab URL', async () => {
     await runPopupScriptWithMockTab('https://chatgpt.com/c/123');
     expect(document.getElementById('status-title').textContent).toContain('ChatGPT Chat Detected');
-    expect(document.getElementById('btn-export').disabled).toBe(false);
+    expect(document.getElementById('btn-export-md').disabled).toBe(false);
+    expect(document.getElementById('btn-export').disabled).toBe(true);
   });
 
   test('auto-detects Gemini platform from active tab URL', async () => {
     await runPopupScriptWithMockTab('https://gemini.google.com/app/xyz');
     expect(document.getElementById('status-title').textContent).toContain('Gemini Chat Detected');
-    expect(document.getElementById('btn-export').disabled).toBe(false);
+    expect(document.getElementById('btn-export-md').disabled).toBe(false);
+    expect(document.getElementById('btn-export').disabled).toBe(true);
   });
 
   test('auto-detects Rovo platform from active tab URL', async () => {
     await runPopupScriptWithMockTab('https://mycompany.atlassian.net/jira/rovo');
     expect(document.getElementById('status-title').textContent).toContain('Rovo Chat Detected');
-    expect(document.getElementById('btn-export').disabled).toBe(false);
+    expect(document.getElementById('btn-export-md').disabled).toBe(false);
+    expect(document.getElementById('btn-export').disabled).toBe(true);
   });
 
   test('auto-detects Grok platform from active tab URL', async () => {
     await runPopupScriptWithMockTab('https://grok.com/chat/xyz');
     expect(document.getElementById('status-title').textContent).toContain('Grok Chat Detected');
-    expect(document.getElementById('btn-export').disabled).toBe(false);
+    expect(document.getElementById('btn-export-md').disabled).toBe(false);
+    expect(document.getElementById('btn-export').disabled).toBe(true);
   });
 
   test('auto-detects Perplexity platform from active tab URL', async () => {
     await runPopupScriptWithMockTab('https://www.perplexity.ai/search/what-is-ai');
     expect(document.getElementById('status-title').textContent).toContain('Perplexity Chat Detected');
-    expect(document.getElementById('btn-export').disabled).toBe(false);
+    expect(document.getElementById('btn-export-md').disabled).toBe(false);
+    expect(document.getElementById('btn-export').disabled).toBe(true);
   });
 
   test('shows error when tab is unsupported URL', async () => {
     await runPopupScriptWithMockTab('https://example.com');
     expect(document.getElementById('status-title').textContent).toBe('Not Supported');
+    expect(document.getElementById('btn-export-md').disabled).toBe(true);
     expect(document.getElementById('btn-export').disabled).toBe(true);
   });
 });

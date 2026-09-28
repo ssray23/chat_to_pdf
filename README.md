@@ -8,8 +8,9 @@ The extension leverages your custom **Typora theme** (`clean-compact.css`) to re
 
 ## Features
 
+- **Markdown (.md) Export**: Export full conversation threads directly into clean, portable GitHub-Flavored Markdown files without page setup annoyances, clipped tables, or margin issues.
 - **Multi-Platform Support**: Scrapes and parses conversation threads dynamically from Claude.ai, ChatGPT.com, Gemini.google.com, Grok.com, and Atlassian Rovo.
-- **Typora CSS Styling**: Integrates your exact [clean-compact.css](./clean-compact.css) stylesheet to format paragraphs, headers, blockquotes, lists, and code blocks.
+- **Typora CSS Styling**: Integrates your exact [clean-compact.css](<./clean-compact.css>) stylesheet to format paragraphs, headers, blockquotes, lists, and code blocks.
 - **Themed Question Cards**: Renders user questions (including complex multiline questions, rich pasted blocks, and blue chat bubbles) inside a soft blue-tinted card with a crisp left accent line for visual contrast.
 - **Atlassian Rovo & Jira/Confluence Smart Chips**: Seamlessly extracts pasted media cards, formats Jira issue keys (`DO-1515`) with authentic status lozenges (`Done`, `In Use`), transforms Confluence page links, preserves follow-up suggested prompts (`↳`), and retains sources pills (`10 Sources`).
 - **Split List Merging & Whitespace Compacting**: Automatically unifies disjointed `<ol>` lists separated by descriptive paragraphs and collapses excessive whitespace.
@@ -20,7 +21,7 @@ The extension leverages your custom **Typora theme** (`clean-compact.css`) to re
 - **Advanced Widget & Noise Cleaner**: Aggressively strips out chaotic UI noise, reasoning dropdowns (`Thought for Xs`), tool status bars (`V Connecting to visualize...`), copy buttons, and feedback controls while strictly preserving visual media and conversational content.
 - **Single Code Block Container**: Enforces strictly 1 outer container card for code blocks across all platforms (such as Gemini's complex nested web components), cleanly eliminating multi-box nesting artifacts while preserving language pill badges.
 - **Strictly White Background**: Implements a universal print reset to force all custom wrappers, cards, and page wrappers to be transparent, ensuring zero gray background panels behind tables or text.
-- **Dynamic Regression Testing Suite**: Integrates an automated pre-build test runner (38 tests across 8 suites) that validates platform auto-detection, DOM scraping, media card extraction, non-regression visual preservation, and Manifest V3 schema before packaging.
+- **Dynamic Regression Testing Suite**: Integrates an automated pre-build test runner that validates platform auto-detection, DOM scraping, media card extraction, non-regression visual preservation, and Manifest V3 schema before packaging.
 - **MV3 & CSP Compliant**: Strictly structured under Manifest V3 security standards, isolating script execution to avoid browser Content Security Policy (CSP) blocks.
 
 ---
@@ -31,8 +32,9 @@ The extension leverages your custom **Typora theme** (`clean-compact.css`) to re
 AI Exporter/
 ├── manifest.json         # Extension configuration & content script matching
 ├── content.js            # Scrapes message threads, serializes images/canvases
-├── print.html            # Local printable document wrapper
-├── print.js              # Renders conversation nodes dynamically
+├── md-converter.js       # HTML to GFM Markdown conversion engine
+├── print.html            # Local printable document wrapper (PDF export)
+├── print.js              # Renders conversation nodes dynamically (PDF export)
 ├── print.css             # Document page rules, text sizes & background resets
 ├── clean-compact.css     # User-provided Typora markdown stylesheet
 ├── CHROMEWEBSTORE.md     # Web store publication description & permission guides
