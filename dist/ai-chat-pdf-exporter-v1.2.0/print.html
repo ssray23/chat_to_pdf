@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Conversation Export</title>
+  <!-- Load the user-provided Typora theme styling exactly -->
+  <link rel="stylesheet" href="clean-compact.css">
+  <!-- Load our custom print layout stylesheet -->
+  <link rel="stylesheet" href="print.css">
+</head>
+<body>
+  <div id="write">
+    <!-- Header of the export document -->
+    <header class="export-header">
+      <h1 class="chat-title" id="chat-title">Conversation Thread</h1>
+      <div class="chat-meta">
+        <span class="meta-item">Source: <strong id="chat-platform">-</strong></span>
+        <span class="meta-item">Exported on: <strong id="export-date">-</strong></span>
+      </div>
+      <hr>
+    </header>
+
+    <!-- The thread containing all messages -->
+    <div class="chat-thread" id="chat-thread">
+      <!-- Dynamically populated -->
+    </div>
+  </div>
+
+  <script src="print.js"></script>
+</body>
+</html>

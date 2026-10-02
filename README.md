@@ -127,6 +127,13 @@ To guarantee a clean layout when printing or viewing:
    - Added `collectTurns` to smoothly sweep virtualized chat scroll containers from top to bottom before scraping, snapshotting every turn into memory (`deepCloneWithShadowsAndSvgs`) so offscreen turns are never dropped.
 5. **Button Container Preservation ([content.js](<./content.js>)):**
    - Preserves user prompts contained inside `<button>` or `role="button"` elements by converting them to clean `<div>` blocks instead of stripping them as action controls.
+6. **Elimination of Excessive Blank Lines ([md-converter.js](<./md-converter.js>)):**
+   - Strips lines containing solely whitespace characters (`/^[ \t\u00a0]+$/gm`) in `postProcessMarkdown`, preventing HTML inter-element indentation and spacing (e.g. Grok Streamdown) from inflating into consecutive blank paragraphs.
+7. **Zero-Margin Question Card Headings ([clean-compact.css](<./clean-compact.css>), [print.css](<./print.css>), [md-converter.js](<./md-converter.js>)):**
+   - Added `:first-child` and `h1:first-child..h6:first-child` resets with `margin-top: 0 !important` inside `#write blockquote` across `clean-compact.css` and `print.css`, eliminating the 1.4rem heading margin gap at the top of question cards in Typora and print layouts.
+   - Sanitized multi-line prompt parsing to strip leading/trailing empty lines, ensuring prompt cards never emit an initial empty `>\n` line.
+8. **Cross-Line Bold Boundary Preservation ([md-converter.js](<./md-converter.js>)):**
+   - Restricted empty bold cleanup (`/\*\*[ \t\u00a0]*\*\*/g`) to strictly horizontal whitespace, preventing cross-line bold boundaries (`**\n\n**`) from swallowing newlines and fusing user prompts with assistant responses.
 
 ---
 

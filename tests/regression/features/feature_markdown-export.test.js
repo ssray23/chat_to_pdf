@@ -339,6 +339,75 @@ describe('[FEATURE] Markdown (.md) Export Regression Suite', () => {
       expect(md).toContain('| **3. Handback (10 unsold seats)** |');
       expect(md).toContain('| **4. Flight Departs** |');
     });
+
+    test('strips stray whitespace lines between HTML block elements (Grok Streamdown pattern) and avoids empty paragraphs', () => {
+      const grokHtml = `
+        <p>First paragraph explaining DTAA.</p>
+        <h3>Simple explanation</h3>
+        <p>Most countries tax income in two ways:</p>
+        <ul>
+          <li>Source country</li>
+          <li>Residence country</li>
+        </ul>
+        <p>Without a treaty, you could pay tax twice.</p>
+      `;
+
+      const chatData = {
+        platform: 'Grok',
+        title: 'DTAA Conversation',
+        messages: [
+          { role: 'user', html: '<p>explain DTAA in simple terms</p>' },
+          { role: 'assistant', html: grokHtml }
+        ]
+      };
+
+      const result = convertChatToMarkdown(chatData);
+      // Ensure no lines with lone spaces (\n \n or \n  \n) exist
+      expect(result.markdown).not.toMatch(/\n[ \t]+\n/);
+      // Verify standard paragraph separation without gaps
+      expect(result.markdown).toContain('First paragraph explaining DTAA.\n\n### Simple explanation\n\nMost countries tax income in two ways:');
+    });
+
+    test('preserves bold boundaries between prompt card and assistant response without concatenation or cross-line swallowing', () => {
+      const chatData = {
+        platform: 'Grok',
+        title: 'DTAA Conversation',
+        messages: [
+          { role: 'user', html: '<p>explain DTAA in simple terms with an example. think I might be impactred as I have income in UK (primary, salary) and India (secondary, rental)</p>' },
+          { role: 'assistant', html: '<p><strong>DTAA (Double Taxation Avoidance Agreement)</strong> is a tax treaty between two countries that stops the same income from being fully taxed twice.</p>' }
+        ]
+      };
+
+      const result = convertChatToMarkdown(chatData);
+      // Verify question is intact as its own card heading without assistant content concatenated onto the line
+      expect(result.markdown).toContain('> ### **explain DTAA in simple terms with an example. think I might be impactred as I have income in UK (primary, salary) and India (secondary, rental)**\n\n**DTAA (Double Taxation Avoidance Agreement)** is a tax treaty');
+      // Verify assistant text is NOT inside the blockquote
+      expect(result.markdown).not.toContain('rental)DTAA');
+    });
+
+    test('ensures prompt cards never start with a blank leading line even if prompt has leading whitespace or blank paragraphs', () => {
+      const chatData = {
+        platform: 'ChatGPT',
+        title: 'Multi-line Prompt',
+        messages: [
+          { role: 'user', html: '<p><br></p><p>First actual question line</p><p>Second detail line</p>' },
+          { role: 'assistant', html: '<p>Assistant response here.</p>' }
+        ]
+      };
+
+      const result = convertChatToMarkdown(chatData);
+      expect(result.markdown).toMatch(/> ### \*\*First actual question line\*\*/);
+      expect(result.markdown).not.toMatch(/>\n> ### \*\*/);
+    });
+
+    test('clean-compact.css and print.css define first-child margin-top 0 on blockquotes for heading cards', () => {
+      const cleanCss = fs.readFileSync(path.join(__dirname, '../../../clean-compact.css'), 'utf8');
+      const printCss = fs.readFileSync(path.join(__dirname, '../../../print.css'), 'utf8');
+
+      expect(cleanCss).toMatch(/#write blockquote > :first-child[\s\S]*?margin-top:\s*0\s*!important/);
+      expect(printCss).toMatch(/#write blockquote > :first-child[\s\S]*?margin-top:\s*0\s*!important/);
+    });
   });
 
 });
+
