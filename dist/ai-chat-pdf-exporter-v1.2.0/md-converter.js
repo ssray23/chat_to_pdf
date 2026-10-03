@@ -351,6 +351,25 @@
       return '';
     }
 
+    // Ignore screen reader-only helper text (e.g. "You said:", "ChatGPT said:", "Copy turn")
+    if (node.classList && (node.classList.contains('sr-only') || (node.matches && node.matches('[class*="sr-only" i]')))) {
+      return '';
+    }
+
+    // Ignore conversational announcement headers used by screen readers
+    if (/^h[1-6]$/.test(tagName) || tagName === 'p' || tagName === 'span') {
+      const rawText = node.textContent.trim();
+      if (/^(You said|ChatGPT said|Claude said|User said):?$/i.test(rawText)) {
+        return '';
+      }
+    }
+
+    // Special Element: File Attachment (.ai-exporter-file-attachment or [data-filename])
+    if (node.classList && (node.classList.contains('ai-exporter-file-attachment') || node.hasAttribute('data-filename'))) {
+      const name = node.getAttribute('data-filename') || node.textContent.trim().replace(/^📎\s*/, '');
+      return name ? `\n\n📎 **${name}**\n\n` : '';
+    }
+
     // Special Element: Code language pill (language is attached to code block fence)
     if (node.classList.contains('code-language-pill') || node.classList.contains('code-language-pill-wrapper')) {
       return '';
@@ -419,8 +438,20 @@
       return inner ? `\n\n${prefix} ${inner}\n\n` : '';
     }
 
-    // ASCII / Box-drawing Diagram inside paragraph or generic block
-    if ((tagName === 'p' || tagName === 'div') && /[─│┌┐└┘├┤┬┴►▼▲◄]/.test(node.textContent) && (node.textContent.includes('\n') || node.querySelector('br'))) {
+    // ASCII / Box-drawing Diagram inside leaf paragraph, leaf code, or leaf div (NOT container divs like .markdown or section)
+    const hasBlockChildren = node.querySelector && node.querySelector('p, div, section, article, h1, h2, h3, h4, h5, h6, table, ul, ol, pre, blockquote') !== null;
+    const isMonoOrCode = (node.classList && (node.classList.contains('font-mono') || node.classList.contains('code') || (node.matches && node.matches('[class*="mono" i], [class*="code" i]')))) ||
+                         (node.style && node.style.fontFamily && /mono|courier|consolas/i.test(node.style.fontFamily));
+    const rawContent = node.textContent;
+    const boxCharsMatch = rawContent.match(/[─│┌┐└┘├┤┬┴►▼▲◄]/g);
+    const boxCharCount = boxCharsMatch ? boxCharsMatch.length : 0;
+    const isLikelyDiagram = !hasBlockChildren && 
+      boxCharCount >= 2 && 
+      (rawContent.includes('\n') || (node.querySelector && node.querySelector('br'))) &&
+      (isMonoOrCode || rawContent.length < 800) &&
+      (tagName === 'p' || tagName === 'div' || tagName === 'pre' || tagName === 'code');
+
+    if (isLikelyDiagram) {
       const text = extractPreservedText(node).replace(/\r\n/g, '\n').trimEnd();
       let fence = '```';
       while (text.includes(fence)) fence += '`';
@@ -838,7 +869,13 @@
     // so inter-element HTML indentation/newlines (e.g. Grok Streamdown) don't become empty paragraphs
     out = out.replace(/^[ \t\u00a0]+$/gm, '');
 
-    // 7. Clean up leading/trailing dashes and multiple newlines
+    // 7. Clean raw ChatGPT / OpenAI internal citation tokens (e.g. \uE200filecite...\uE201)
+    out = out.replace(/\uE200[\s\S]*?\uE201/g, '').replace(/[\uE200-\uE203]/g, '');
+
+    // 8. Clean redundant screen-reader artifact lines if any sneaked through
+    out = out.replace(/^[> ]*#{1,6}\s*(?:You said|ChatGPT said|Claude said):?\s*$/gmi, '');
+
+    // 9. Clean up leading/trailing dashes and multiple newlines
     out = out
       .replace(/\n{3,}/g, '\n\n')
       .trim();
@@ -890,7 +927,7 @@
       const msg = messages[i];
       const isUser = msg.role === 'user';
       
-      let turnMd = htmlToMarkdown(msg.html, opts);
+      let turnMd = msg.markdown || msg.rawMarkdown || htmlToMarkdown(msg.html, opts);
       if (!turnMd || !turnMd.trim()) continue;
 
       if (isUser) {

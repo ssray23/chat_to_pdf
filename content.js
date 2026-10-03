@@ -500,6 +500,12 @@ function cleanNoise(clone) {
   
   // 3. Remove platform-specific layout controls and action bars (targeted selectors only)
   const noiseSelectors = [
+    // Screen-reader-only labels and live regions
+    '.sr-only',
+    '[class*="sr-only" i]',
+    '#aria-notify-live-region-assertive',
+    '#aria-notify-live-region-polite',
+    '[aria-live]',
     // ChatGPT Action bars & feedback buttons
     '[data-testid*="action-bar" i]',
     '[data-testid*="copy-turn-action-button" i]',
@@ -553,6 +559,28 @@ function cleanNoise(clone) {
     try {
       clone.querySelectorAll(selector).forEach(el => el.remove());
     } catch (e) {}
+  });
+
+  // Remove conversational announcement headers used by screen readers (e.g. "You said:", "ChatGPT said:")
+  clone.querySelectorAll('h1, h2, h3, h4, h5, h6, span, div, p').forEach(el => {
+    const txt = el.textContent.trim();
+    if (/^(You said|ChatGPT said|Claude said|User said):?$/i.test(txt)) {
+      el.remove();
+    }
+  });
+
+  // Detect and normalize ChatGPT file attachments in prompts into structured attachment pills
+  clone.querySelectorAll('[data-testid*="attachment" i], [data-testid*="file" i], [class*="file" i], [class*="attachment" i]').forEach(el => {
+    const text = el.textContent.trim();
+    const fileMatch = text.match(/([a-zA-Z0-9_\-.]+\.(?:pdf|docx?|xlsx?|csv|txt|json|py|js|html|zip|tar|gz))\b/i);
+    if (fileMatch) {
+      const fileName = fileMatch[1];
+      const pill = document.createElement('div');
+      pill.className = 'ai-exporter-file-attachment';
+      pill.setAttribute('data-filename', fileName);
+      pill.textContent = fileName;
+      el.replaceWith(pill);
+    }
   });
 
   // Remove empty pre or code containers that have no text and no visual media
@@ -1040,9 +1068,13 @@ function isUserTurn(el) {
   if (tagName === 'user-query') return true;
   if (tagName === 'model-response') return false;
 
-  if (el.querySelector && el.querySelector('[data-message-author-role="user"]')) return true;
+  const hasAsstChild = el.querySelector && el.querySelector('[data-message-author-role="assistant"], .markdown, div[class*="markdown" i]');
+  const hasUserChild = el.querySelector && el.querySelector('[data-message-author-role="user"]');
+  // If container has BOTH user and assistant, it is a compound turn (not solely a user turn)
+  if (hasAsstChild && hasUserChild) return false;
+  if (hasUserChild) return true;
+  if (hasAsstChild) return false;
   if (el.closest && el.closest('[data-message-author-role="user"]')) return true;
-  if (el.querySelector && el.querySelector('[data-message-author-role="assistant"]')) return false;
   if (el.classList && el.classList.contains('ak-renderer-document')) return false;
   if (el.querySelector && el.querySelector('.ak-renderer-document')) return false;
 
@@ -1107,13 +1139,15 @@ function isUserTurn(el) {
 function classifyTurnRole(el, index = 0, totalTurns = 1) {
   if (!el) return 'assistant';
   
-  // 1. Prioritize user turn detection
-  if (isUserTurn(el)) return 'user';
-
-  // 2. Assistant semantic signals
+  // 1. Explicit author role attributes
   const authorRole = (el.getAttribute('data-message-author-role') || el.getAttribute('data-role') || el.getAttribute('role') || '').toLowerCase();
+  if (authorRole === 'user' || authorRole === 'human') return 'user';
   if (authorRole === 'assistant' || authorRole === 'agent' || authorRole === 'model' || authorRole === 'bot') return 'assistant';
 
+  // 2. Prioritize user turn detection
+  if (isUserTurn(el)) return 'user';
+
+  // 3. Assistant semantic signals
   const tagName = el.tagName ? el.tagName.toLowerCase() : '';
   if (tagName === 'model-response') return 'assistant';
 
@@ -1134,7 +1168,7 @@ function classifyTurnRole(el, index = 0, totalTurns = 1) {
     return 'user';
   }
 
-  // 3. Rich Markdown / Assistant Content Fingerprint
+  // 4. Rich Markdown / Assistant Content Fingerprint
   const hasCodeBlock = el.querySelector && el.querySelector('pre, code.hljs, [class*="code-block" i]') !== null;
   const hasTable = el.querySelector && el.querySelector('table') !== null;
   const hasMath = el.querySelector && el.querySelector('.katex, .MathJax, [data-math]') !== null;
@@ -1146,32 +1180,50 @@ function classifyTurnRole(el, index = 0, totalTurns = 1) {
     return 'assistant';
   }
 
-  // 4. Tie-breaker via alternating rhythm parity
+  // 5. Tie-breaker via alternating rhythm parity
   return index % 2 === 0 ? 'user' : 'assistant';
 }
 
-// Extract ChatGPT /share/ public page content (DOM and SSR JSON payload fallback)
+// Extract ChatGPT /share/ public page content (DOM and SSR JSON/Turbo-Stream payload fallback)
 function extractChatGPTShareMessages() {
   const extracted = [];
   
-  // 1. Try DOM elements with [data-message-id] or articles
+  // 1. Try explicit author role elements first
+  const explicitMessages = document.querySelectorAll('[data-message-author-role="user"], [data-message-author-role="assistant"]');
+  if (explicitMessages.length > 0) {
+    const unique = getUniqueElements(explicitMessages);
+    for (let i = 0; i < unique.length; i++) {
+      const node = unique[i];
+      const role = (node.getAttribute('data-message-author-role') || '').toLowerCase() === 'user' ? 'user' : 'assistant';
+      extracted.push({ role, contentEl: node });
+    }
+    if (extracted.length > 0) return extracted;
+  }
+
+  // 2. Try DOM elements with [data-message-id] or articles and split compound turns
   const messageNodes = document.querySelectorAll('[data-message-id], [data-testid*="conversation-turn"], [data-testid*="message"], article');
   if (messageNodes.length > 0) {
     const unique = getUniqueElements(messageNodes);
     for (let i = 0; i < unique.length; i++) {
       const node = unique[i];
-      const role = classifyTurnRole(node, i, unique.length);
-      const contentEl = node.querySelector('[data-message-author-role="assistant"]') || 
-                        node.querySelector('[data-message-author-role="user"]') || 
-                        node.querySelector('[data-message-author-role]') || 
-                        node.querySelector('.whitespace-pre-wrap') || 
-                        node;
-      extracted.push({ role, contentEl });
+      const userEl = node.querySelector('[data-message-author-role="user"]') || node.querySelector('.font-user-message, div[class*="user-message" i], div[class*="user_message" i]');
+      const asstEl = node.querySelector('[data-message-author-role="assistant"]') || node.querySelector('.markdown, div[class*="markdown" i], [class*="agent-turn" i]');
+      if (userEl && asstEl && userEl !== asstEl) {
+        extracted.push({ role: 'user', contentEl: userEl });
+        extracted.push({ role: 'assistant', contentEl: asstEl });
+      } else {
+        const role = classifyTurnRole(node, i, unique.length);
+        const contentEl = asstEl || userEl || 
+                          node.querySelector('[data-message-author-role]') || 
+                          node.querySelector('.whitespace-pre-wrap') || 
+                          node;
+        extracted.push({ role, contentEl });
+      }
     }
     if (extracted.length > 0) return extracted;
   }
 
-  // 2. Try querying .markdown containers and matching with prompt elements
+  // 3. Try querying .markdown containers and matching with prompt elements
   const allBlocks = getUniqueElements(document.querySelectorAll('h1, h2, h3, .whitespace-pre-wrap, .markdown, div[class*="markdown" i]'));
   if (allBlocks.length > 0) {
     for (let i = 0; i < allBlocks.length; i++) {
@@ -1182,46 +1234,151 @@ function extractChatGPTShareMessages() {
     if (extracted.length > 0) return extracted;
   }
 
-  // 3. Fallback: Parse embedded JSON state (e.g. client-bootstrap, __NEXT_DATA__)
+  // 4. Fallback: Parse embedded JSON / Remix Turbo-Stream state
   try {
-    const scripts = document.querySelectorAll('script[type="application/json"], script#__NEXT_DATA__, script#client-bootstrap');
-    for (const script of scripts) {
-      const raw = script.textContent.trim();
-      if (!raw || (!raw.includes('mapping') && !raw.includes('linear_conversation') && !raw.includes('message') && !raw.includes('title'))) continue;
-      
-      const data = JSON.parse(raw);
-      const foundMessages = [];
-      const traverse = (obj) => {
-        if (!obj || typeof obj !== 'object') return;
-        if (obj.message && obj.message.content && obj.message.author) {
-          const role = obj.message.author.role === 'user' ? 'user' : 'assistant';
-          const parts = obj.message.content.parts || [];
-          const text = parts.filter(p => typeof p === 'string').join('\n');
-          if (text.trim()) {
-            foundMessages.push({ role, text });
+    // (A) Check React Router / Remix streamController.enqueue or window.__reactRouterContext
+    const decodeTurbo = (turbo, index, seen = new Map()) => {
+      if (seen.has(index)) return seen.get(index);
+      const raw = turbo[index];
+      if (raw === null || raw === undefined) return raw;
+      if (typeof raw === 'number' || typeof raw === 'boolean' || typeof raw === 'string') return raw;
+      if (Array.isArray(raw)) {
+        const arr = [];
+        seen.set(index, arr);
+        for (const item of raw) {
+          if (typeof item === 'number') {
+            if (item === -1) arr.push(undefined);
+            else if (item === -2) arr.push(null);
+            else if (item === -3) arr.push(NaN);
+            else if (item === -4) arr.push(Infinity);
+            else if (item === -5) arr.push(-Infinity);
+            else arr.push(decodeTurbo(turbo, item, seen));
+          } else arr.push(item);
+        }
+        return arr;
+      }
+      if (typeof raw === 'object') {
+        const obj = {};
+        seen.set(index, obj);
+        for (const [k, v] of Object.entries(raw)) {
+          let realKey = k;
+          if (k.startsWith('_')) {
+            const keyIdx = parseInt(k.slice(1), 10);
+            realKey = turbo[keyIdx];
+          }
+          let realVal = v;
+          if (typeof v === 'number') {
+            if (v === -1) realVal = undefined;
+            else if (v === -2) realVal = null;
+            else if (v === -3) realVal = NaN;
+            else if (v === -4) realVal = Infinity;
+            else if (v === -5) realVal = -Infinity;
+            else realVal = decodeTurbo(turbo, v, seen);
+          }
+          obj[realKey] = realVal;
+        }
+        return obj;
+      }
+      return raw;
+    };
+
+    const foundMessages = [];
+    const visited = new Set();
+    const seenIds = new Set();
+    let currentTurbo = null;
+
+    const traverse = (obj) => {
+      if (!obj || typeof obj !== 'object' || visited.has(obj)) return;
+      visited.add(obj);
+
+      const target = (obj && obj.message && typeof obj.message === 'object') ? obj.message : obj;
+      if (target && target.content && target.author) {
+        const msgId = target.id || (obj.id ? obj.id : null);
+        if (!msgId || !seenIds.has(msgId)) {
+          if (msgId) seenIds.add(msgId);
+          const role = target.author.role === 'user' ? 'user' : (target.author.role === 'assistant' ? 'assistant' : null);
+          if (role) {
+            const rawParts = target.content.parts || [];
+            const parts = Array.isArray(rawParts) ? rawParts : [rawParts];
+            const text = parts.map(p => (typeof p === 'number' && currentTurbo && currentTurbo[p]) ? currentTurbo[p] : p)
+                              .filter(p => typeof p === 'string')
+                              .join('\n').trim();
+            const meta = target.metadata || {};
+            const isHidden = meta.is_visually_hidden_from_conversation || meta.is_user_system_message;
+            if (text && !isHidden && text !== 'Original custom instructions no longer available') {
+              let attachmentName = '';
+              if (meta.attachments && meta.attachments.length > 0 && meta.attachments[0].name) {
+                attachmentName = meta.attachments[0].name;
+              }
+              foundMessages.push({ role, text, attachmentName });
+            }
           }
         }
+      }
+
+      if (Array.isArray(obj)) {
+        for (const item of obj) traverse(item);
+      } else {
         for (const key of Object.keys(obj)) {
           traverse(obj[key]);
         }
-      };
-      traverse(data);
+      }
+    };
 
-      if (foundMessages.length > 0) {
-        for (const m of foundMessages) {
-          const div = document.createElement('div');
-          div.setAttribute('data-message-author-role', m.role);
-          if (m.role === 'assistant') {
-            div.className = 'markdown';
-          }
-          div.textContent = m.text;
-          extracted.push({ role: m.role, contentEl: div });
+    // First try scripts with streamController.enqueue
+    const scripts = Array.from(document.querySelectorAll('script'));
+    for (const script of scripts) {
+      const text = script.textContent || '';
+      if (text.includes('streamController.enqueue')) {
+        const match = text.match(/window\.__reactRouterContext\.streamController\.enqueue\(([\s\S]*?)\);?\s*$/m) ||
+                      text.match(/streamController\.enqueue\(([\s\S]*?)\);?\s*$/m);
+        if (match) {
+          const rawArg = match[1].trim().replace(/\);?\s*$/, '');
+          try {
+            const turbo = JSON.parse(JSON.parse(rawArg));
+            currentTurbo = turbo;
+            const root = decodeTurbo(turbo, 0);
+            traverse(root);
+          } catch (e) {}
         }
-        return extracted;
       }
     }
+
+    // Next try standard JSON script tags (__NEXT_DATA__, client-bootstrap)
+    if (foundMessages.length === 0) {
+      const jsonScripts = document.querySelectorAll('script[type="application/json"], script#__NEXT_DATA__, script#client-bootstrap');
+      for (const script of jsonScripts) {
+        const raw = script.textContent.trim();
+        if (!raw || (!raw.includes('mapping') && !raw.includes('linear_conversation') && !raw.includes('message') && !raw.includes('title'))) continue;
+        try {
+          const data = JSON.parse(raw);
+          traverse(data);
+        } catch (e) {}
+      }
+    }
+
+    if (foundMessages.length > 0) {
+      for (const m of foundMessages) {
+        const div = document.createElement('div');
+        div.setAttribute('data-message-author-role', m.role);
+        if (m.attachmentName) {
+          const attachEl = document.createElement('div');
+          attachEl.className = 'ai-exporter-file-attachment';
+          attachEl.setAttribute('data-filename', m.attachmentName);
+          attachEl.textContent = m.attachmentName;
+          div.appendChild(attachEl);
+        }
+        const textEl = document.createElement('div');
+        textEl.className = m.role === 'assistant' ? 'markdown' : 'whitespace-pre-wrap';
+        textEl.setAttribute('data-raw-markdown', 'true');
+        textEl.textContent = m.text;
+        div.appendChild(textEl);
+        extracted.push({ role: m.role, contentEl: div });
+      }
+      return extracted;
+    }
   } catch (e) {
-    console.warn('Failed to parse share page JSON payload:', e);
+    console.warn('Failed to parse share page JSON/Turbo payload:', e);
   }
 
   return extracted;
@@ -1358,6 +1515,25 @@ async function collectTurns(queryFn, platform) {
     const unique = getUniqueElements(rawTurns);
     for (let i = 0; i < unique.length; i++) {
       const turn = unique[i];
+
+      // Safety check: if a container holds BOTH user and assistant elements, split them
+      const userSub = turn.querySelector && turn.querySelector('[data-message-author-role="user"]');
+      const asstSub = turn.querySelector && (turn.querySelector('[data-message-author-role="assistant"]') || turn.querySelector('.markdown, div[class*="markdown" i]'));
+      if (userSub && asstSub && userSub !== asstSub) {
+        for (const sub of [userSub, asstSub]) {
+          const text = sub.textContent.trim();
+          const hasMedia = sub.querySelector('img, canvas, svg, iframe, table');
+          if (!text && !hasMedia) continue;
+          const role = classifyTurnRole(sub, collected.length, unique.length);
+          const fp = role + '|' + text.slice(0, 100) + '|' + text.slice(-50) + '|' + text.length;
+          if (seenFingerprints.has(fp)) continue;
+          seenFingerprints.add(fp);
+          const clone = deepCloneWithShadowsAndSvgs(sub);
+          collected.push({ role, clone, contentEl: sub });
+        }
+        continue;
+      }
+
       const text = turn.textContent.trim();
       const hasMedia = turn.querySelector('img, canvas, svg, iframe, table');
       if (!text && !hasMedia) continue;
@@ -1434,8 +1610,34 @@ async function getChatMessages(platform) {
     if (platform === 'ChatGPT' || url.includes('chatgpt.com') || url.includes('chat.openai.com')) {
       const isSharePage = url.includes('/share/');
       queryFn = () => {
-        const articles = document.querySelectorAll('article');
-        if (articles.length > 0) return Array.from(articles);
+        // Priority 1: Direct explicit individual message nodes
+        const explicitMessages = Array.from(document.querySelectorAll(
+          '[data-message-author-role="user"], [data-message-author-role="assistant"]'
+        ));
+        if (explicitMessages.length > 0) return explicitMessages;
+
+        // Priority 2: Split compound articles or conversation turns
+        const containers = Array.from(document.querySelectorAll(
+          'article, [data-testid^="conversation-turn-"], [data-testid*="conversation-turn"]'
+        ));
+        if (containers.length > 0) {
+          const splitMessages = [];
+          for (const container of containers) {
+            const userPart = container.querySelector('[data-message-author-role="user"]') ||
+                             container.querySelector('.font-user-message, div[class*="user-message" i], div[class*="user_message" i]');
+            const asstPart = container.querySelector('[data-message-author-role="assistant"]') ||
+                             container.querySelector('.markdown, div[class*="markdown" i], [class*="agent-turn" i]');
+            if (userPart && asstPart && userPart !== asstPart) {
+              splitMessages.push(userPart);
+              splitMessages.push(asstPart);
+            } else {
+              splitMessages.push(container);
+            }
+          }
+          if (splitMessages.length > 0) return splitMessages;
+        }
+
+        // Priority 3: Share page extractor (DOM structure or streaming payload fallback)
         if (isSharePage) {
           const shareTurns = extractChatGPTShareMessages();
           return shareTurns.map(t => t.contentEl);

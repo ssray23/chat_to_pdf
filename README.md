@@ -134,6 +134,16 @@ To guarantee a clean layout when printing or viewing:
    - Sanitized multi-line prompt parsing to strip leading/trailing empty lines, ensuring prompt cards never emit an initial empty `>\n` line.
 8. **Cross-Line Bold Boundary Preservation ([md-converter.js](<./md-converter.js>)):**
    - Restricted empty bold cleanup (`/\*\*[ \t\u00a0]*\*\*/g`) to strictly horizontal whitespace, preventing cross-line bold boundaries (`**\n\n**`) from swallowing newlines and fusing user prompts with assistant responses.
+9. **ChatGPT Share Compound Turn De-Conflation ([content.js](<./content.js>)):**
+   - Splits compound `<article>` and `.conversation-turn` elements containing both user questions and assistant responses into discrete turns, preventing assistant responses from being misclassified as user prompt cards and swallowed into blockquotes.
+10. **Targeted ASCII Diagram Isolation ([md-converter.js](<./md-converter.js>)):**
+    - Restricts ASCII diagram code block conversion strictly to leaf nodes (`!hasBlockChildren`), ensuring that markdown container elements with headings, tables, and paragraphs preserve their formatting while diagrams remain cleanly isolated in code blocks.
+11. **Screen-Reader & Citation Token Stripping ([content.js](<./content.js>), [md-converter.js](<./md-converter.js>)):**
+    - Automatically strips screen-reader accessibility tags (`.sr-only`, `You said:`, `ChatGPT said:`), live regions, and internal OpenAI citation markers (`\uE200...\uE201`).
+12. **Prompt File Attachment Formatting ([content.js](<./content.js>), [md-converter.js](<./md-converter.js>)):**
+    - Normalizes prompt file attachments into clean badge pills (`📎 **filename**`) and ensures proper line separation from prompt text.
+13. **ChatGPT React Router v7 Streaming Hydration Support ([content.js](<./content.js>)):**
+    - Decodes streaming turbo-stream chunks from `window.__reactRouterContext.streamController.enqueue` for live and shared ChatGPT conversations.
 
 ---
 

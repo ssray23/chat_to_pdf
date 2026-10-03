@@ -282,6 +282,95 @@ describe('Content Script Scraper & DOM Manipulation Regression Suite', () => {
     expect(messages[1].html).toContain('Control Center sleep timer shortcut');
   });
 
+  test('getChatMessages splits compound article elements containing both user and assistant turns', async () => {
+    eval(contentJsCode + `
+      window.getChatMessages = getChatMessages;
+    `);
+
+    document.body.innerHTML = `
+      <main>
+        <article class="conversation-turn-wrapper">
+          <div data-message-author-role="user" class="user-block">
+            <h4 class="sr-only">You said:</h4>
+            <div class="attachment-chip">
+              <span class="file-name">UK_India_Tax_and_DTAA_Analysis.pdf</span>
+              <span class="file-badge">PDF</span>
+            </div>
+            <div class="whitespace-pre-wrap">explain why I was able to claim a tax refund for my pension contributions</div>
+          </div>
+          <div data-message-author-role="assistant" class="assistant-block">
+            <h5 class="sr-only">ChatGPT said:</h5>
+            <div class="markdown">
+              <p>The key is that your workplace pension was using Relief at Source (RAS).</p>
+            </div>
+          </div>
+        </article>
+      </main>
+    `;
+
+    delete window.location;
+    window.location = new URL('https://chatgpt.com/share/6ac09d5e-b260-83eb-8310-8ab068d80d08');
+
+    const messages = await window.getChatMessages('ChatGPT');
+    expect(messages.length).toBe(2);
+    expect(messages[0].role).toBe('user');
+    expect(messages[0].html).toContain('UK_India_Tax_and_DTAA_Analysis.pdf');
+    expect(messages[0].html).toContain('explain why I was able to claim a tax refund');
+    expect(messages[0].html).not.toContain('You said:');
+    expect(messages[0].html).not.toContain('Relief at Source');
+
+    expect(messages[1].role).toBe('assistant');
+    expect(messages[1].html).toContain('Relief at Source (RAS)');
+    expect(messages[1].html).not.toContain('ChatGPT said:');
+    expect(messages[1].html).not.toContain('explain why I was able to claim');
+  });
+
+  test('getChatMessages extracts from React Router streaming enqueue script on ChatGPT share pages', async () => {
+    eval(contentJsCode + `
+      window.getChatMessages = getChatMessages;
+    `);
+
+    // Turbo-stream payload mapping
+    const turboArray = [
+      {"_1": 2}, // 0: root
+      "messages", // 1
+      [3, 4], // 2: array of msg nodes
+      {"_5": 6, "_7": 8}, // 3: user msg node
+      {"_5": 9, "_7": 10}, // 4: asst msg node
+      "author", // 5
+      {"_11": 12}, // 6: author obj
+      "content", // 7
+      {"_13": [14]}, // 8: content obj
+      {"_11": 15}, // 9: asst author obj
+      {"_13": [16]}, // 10: asst content obj
+      "role", // 11
+      "user", // 12
+      "parts", // 13
+      "Explain pension refund please.", // 14
+      "assistant", // 15
+      "Under Relief at Source, basic tax is reclaimed automatically." // 16
+    ];
+
+    document.body.innerHTML = `
+      <script>
+        window.__reactRouterContext = {};
+        window.__reactRouterContext.streamController = {};
+        window.__reactRouterContext.streamController.enqueue(${JSON.stringify(JSON.stringify(turboArray))});
+      </script>
+      <div>Loading...</div>
+    `;
+
+    delete window.location;
+    window.location = new URL('https://chatgpt.com/share/6ac09d5e-b260-83eb-8310-8ab068d80d08');
+
+    const messages = await window.getChatMessages('ChatGPT');
+    expect(messages.length).toBe(2);
+    expect(messages[0].role).toBe('user');
+    expect(messages[0].html).toContain('Explain pension refund please.');
+    expect(messages[1].role).toBe('assistant');
+    expect(messages[1].html).toContain('Under Relief at Source');
+  });
+
   test('getChatMessages extracts Perplexity query, answer, source cards, and tables', async () => {
     eval(contentJsCode + `
       window.getChatMessages = getChatMessages;

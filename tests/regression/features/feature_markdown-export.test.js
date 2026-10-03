@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { registerRegressionTest } = require('../../helpers/testRegistry');
-const { htmlToMarkdown, convertChatToMarkdown, sanitizeFilename } = require('../../../md-converter');
+const { htmlToMarkdown, convertChatToMarkdown, sanitizeFilename, postProcessMarkdown } = require('../../../md-converter');
 
 registerRegressionTest({
   id: 'REG-FEATURE-MARKDOWN-EXPORT',
@@ -406,6 +406,89 @@ describe('[FEATURE] Markdown (.md) Export Regression Suite', () => {
 
       expect(cleanCss).toMatch(/#write blockquote > :first-child[\s\S]*?margin-top:\s*0\s*!important/);
       expect(printCss).toMatch(/#write blockquote > :first-child[\s\S]*?margin-top:\s*0\s*!important/);
+    });
+
+    test('htmlToMarkdown preserves container divs with mixed headings, tables, paragraphs, and ASCII diagrams without swallowing into a single code block', () => {
+      const complexHtml = `
+        <div class="markdown">
+          <p>Yes. The key is that <strong>your workplace pension was using “Relief at Source” (RAS)</strong>.</p>
+          <h3>Think of the pension contribution as a 2-stage tax relief</h3>
+          <p>You were putting £280 per month out of your take-home pay.</p>
+          <div class="whitespace-pre-wrap font-mono">You pay from net salary                 £280
+│
+│ 20% basic-rate relief
+▼
+HMRC/pension adds                         £70
+│
+▼
+Amount actually invested                 £350</div>
+          <p>Your payslip explicitly showed: <strong>£280 net</strong>.</p>
+          <table>
+            <thead><tr><th>Tax year</th><th>Gross pension contribution</th><th>Additional 20% relief</th></tr></thead>
+            <tbody><tr><td>2022/23</td><td>£1,666.62</td><td>£333.32</td></tr></tbody>
+          </table>
+        </div>
+      `;
+
+      const md = htmlToMarkdown(complexHtml);
+
+      // Verify paragraphs, headings, and tables remain rich markdown
+      expect(md).toContain('Yes. The key is that **your workplace pension was using “Relief at Source” (RAS)**.');
+      expect(md).toContain('### Think of the pension contribution as a 2-stage tax relief');
+      expect(md).toContain('| Tax year | Gross pension contribution | Additional 20% relief |');
+      expect(md).toContain('| 2022/23 | £1,666.62 | £333.32 |');
+
+      // Verify ASCII diagram is isolated in its own code block
+      expect(md).toContain('```text\nYou pay from net salary                 £280\n│\n│ 20% basic-rate relief\n▼\nHMRC/pension adds                         £70\n│\n▼\nAmount actually invested                 £350\n```');
+
+      // Ensure the top of the response is NOT wrapped in a code fence
+      expect(md).not.toMatch(/^```text\s*Yes\. The key/);
+    });
+
+    test('convertChatToMarkdown formats prompt file attachments as distinct pills and separates them from prompt text', () => {
+      const chatData = {
+        platform: 'ChatGPT',
+        title: 'Tax Refund Analysis',
+        messages: [
+          {
+            role: 'user',
+            html: '<div class="ai-exporter-file-attachment" data-filename="UK_India_Tax_and_DTAA_Analysis.pdf">UK_India_Tax_and_DTAA_Analysis.pdf</div><div class="whitespace-pre-wrap">explain why I was able to claim a tax refund for my pension contributions</div>'
+          },
+          {
+            role: 'assistant',
+            html: '<div class="markdown"><p>The key detail is Relief at Source.</p></div>'
+          }
+        ]
+      };
+
+      const result = convertChatToMarkdown(chatData);
+
+      expect(result.markdown).toContain('📎 **UK_India_Tax_and_DTAA_Analysis.pdf**');
+      expect(result.markdown).toContain('explain why I was able to claim a tax refund');
+      expect(result.markdown).not.toContain('Analysis.pdfPDFexplain');
+      expect(result.markdown).not.toContain('> #### You said:');
+      expect(result.markdown).not.toContain('ChatGPT said:');
+    });
+
+    test('postProcessMarkdown cleans raw OpenAI internal citation tokens and screen reader headers', () => {
+      const input = `
+# Discussion
+
+> ### **Prompt**
+
+Here is the conclusion. \uE200filecite\uE202turn0file0\uE202L99-L116\uE201
+And another reference \uE200cite\uE202turn1search0\uE201.
+
+#### You said:
+What next?
+`;
+      const cleaned = postProcessMarkdown(input);
+      expect(cleaned).not.toContain('\uE200');
+      expect(cleaned).not.toContain('\uE201');
+      expect(cleaned).not.toContain('filecite');
+      expect(cleaned).not.toContain('#### You said:');
+      expect(cleaned).toContain('Here is the conclusion.');
+      expect(cleaned).toContain('And another reference .');
     });
   });
 
