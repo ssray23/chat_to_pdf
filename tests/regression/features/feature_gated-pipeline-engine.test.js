@@ -215,5 +215,54 @@ describe('[FEATURE] Gated AI Chat Pipeline Architecture Regression Suite', () =>
     expect(invRes.turns[0].role).toBe('user');
     expect(invRes.turns[1].role).toBe('assistant');
   });
+
+  test('Stage 2 extracts ChatGPT turns even when wrapped in aria-label="Chat history" region and contains toolbars with class="group"', async () => {
+    eval(contentJsCode + `
+      window.ChatInventoryEngine = ChatInventoryEngine;
+      window.getChatMessages = getChatMessages;
+    `);
+
+    document.body.innerHTML = `
+      <main>
+        <div role="region" aria-label="Chat history">
+          <article data-testid="conversation-turn-2">
+            <div data-message-id="msg-1">
+              <div class="whitespace-pre-wrap">Can you show me Tamarind Chicken Curry recipe?</div>
+            </div>
+          </article>
+          <article data-testid="conversation-turn-3">
+            <div data-message-id="msg-2">
+              <div class="markdown prose">
+                <h3>Tamarind Chicken Curry</h3>
+                <p>Here are the steps to make delicious curry.</p>
+              </div>
+            </div>
+            <div class="mt-1 flex justify-start gap-2">
+              <div class="group flex items-center">
+                <button>Copy</button>
+              </div>
+              <div class="group flex items-center">
+                <button>Retry</button>
+              </div>
+            </div>
+          </article>
+        </div>
+      </main>
+    `;
+
+    delete window.location;
+    window.location = new URL('https://chatgpt.com/c/6ace682e-97fc-83ed-8598-03ef218df8a9');
+
+    const inventoryEngine = new window.ChatInventoryEngine();
+    const invRes = await inventoryEngine.inspect('ChatGPT');
+
+    expect(invRes.success).toBe(true);
+    expect(invRes.gate2.passed).toBe(true);
+    expect(invRes.stats.userCount).toBe(1);
+    expect(invRes.stats.asstCount).toBe(1);
+    expect(invRes.turns.length).toBe(2);
+    expect(invRes.turns[0].role).toBe('user');
+    expect(invRes.turns[1].role).toBe('assistant');
+  });
 });
 

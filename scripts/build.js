@@ -105,6 +105,34 @@ if (fs.existsSync(path.join(projectRoot, 'icons'))) {
   copyRecursive(path.join(projectRoot, 'icons'), path.join(unpackedDir, 'icons'));
 }
 
+// Also copy to canonical dist/unpacked
+const canonicalDir = path.join(distDir, 'unpacked');
+if (fs.existsSync(canonicalDir)) {
+  fs.rmSync(canonicalDir, { recursive: true, force: true });
+}
+fs.mkdirSync(canonicalDir, { recursive: true });
+requiredFiles.forEach(rel => {
+  copyRecursive(path.join(projectRoot, rel), path.join(canonicalDir, rel));
+});
+if (fs.existsSync(path.join(projectRoot, 'icons'))) {
+  copyRecursive(path.join(projectRoot, 'icons'), path.join(canonicalDir, 'icons'));
+}
+
+// Synchronize all existing dist/ai-chat-pdf-exporter-v* directories so that any previously loaded folder in Chrome gets the latest code on reload
+const allDistEntries = fs.readdirSync(distDir, { withFileTypes: true });
+allDistEntries.forEach(entry => {
+  if (entry.isDirectory() && entry.name.startsWith('ai-chat-pdf-exporter-v') && entry.name !== `ai-chat-pdf-exporter-v${manifest.version}`) {
+    const targetFolder = path.join(distDir, entry.name);
+    requiredFiles.forEach(rel => {
+      copyRecursive(path.join(projectRoot, rel), path.join(targetFolder, rel));
+    });
+    if (fs.existsSync(path.join(projectRoot, 'icons'))) {
+      copyRecursive(path.join(projectRoot, 'icons'), path.join(targetFolder, 'icons'));
+    }
+    console.log(` Synchronized latest build files to existing loaded directory: dist/${entry.name}`);
+  }
+});
+
 console.log(` Unpacked extension copied to: dist/ai-chat-pdf-exporter-v${manifest.version}`);
 
 // Use zip command if available

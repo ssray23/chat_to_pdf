@@ -169,6 +169,7 @@ body {
 .action-section {
   display: flex;
   flex-direction: column;
+  gap: 10px;
 }
 
 .btn {
@@ -204,8 +205,29 @@ body {
   filter: brightness(0.95);
 }
 
+.btn-secondary {
+  background: hsla(220, 25%, 15%, 0.5);
+  color: var(--text-dim);
+  border: 1px solid var(--border-glass);
+  box-shadow: none;
+  font-size: 12.5px;
+  padding: 10px;
+}
+
+.btn-badge {
+  font-size: 9px;
+  background: hsla(220, 25%, 28%, 0.7);
+  color: var(--text-dim);
+  padding: 2px 7px;
+  border-radius: 6px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  border: 1px solid hsla(220, 25%, 40%, 0.2);
+}
+
 .btn:disabled {
-  opacity: 0.5;
+  opacity: 0.45;
   cursor: not-allowed;
   transform: none !important;
   box-shadow: none !important;

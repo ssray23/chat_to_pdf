@@ -1,10 +1,38 @@
-const CONTENT_SCRIPT_VERSION = '1.2.1';
+const CONTENT_SCRIPT_VERSION = '1.2.10';
 if (typeof window !== 'undefined') {
   window.__AI_EXPORTER_VERSION__ = CONTENT_SCRIPT_VERSION;
 }
 
+// Comprehensive Pipeline Diagnostic Logger
+const Logger = {
+  prefix: '[AI Exporter Pipeline]',
+  stage1(msg, ...args) {
+    console.log(`%c${this.prefix} [Stage 1: MountSweep] ${msg}`, 'color: #0284c7; font-weight: bold;', ...args);
+  },
+  stage2(msg, ...args) {
+    console.log(`%c${this.prefix} [Stage 2: Inventory] ${msg}`, 'color: #7c3aed; font-weight: bold;', ...args);
+  },
+  recovery(msg, ...args) {
+    console.log(`%c${this.prefix} [Stage 2: Auto-Recovery] ${msg}`, 'color: #d97706; font-weight: bold;', ...args);
+  },
+  gate(gateName, passed, details) {
+    const color = passed ? '#16a34a' : '#dc2626';
+    console.log(`%c${this.prefix} [${gateName}] ${passed ? 'PASSED' : 'FAILED'}:`, `color: ${color}; font-weight: bold;`, details);
+  },
+  stage3(msg, ...args) {
+    console.log(`%c${this.prefix} [Stage 3: Markdown Handover] ${msg}`, 'color: #059669; font-weight: bold;', ...args);
+  },
+  error(msg, ...args) {
+    console.error(`%c${this.prefix} [ERROR] ${msg}`, 'color: #dc2626; font-weight: bold;', ...args);
+  }
+};
+
 // Listen for messages from the popup
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (typeof window !== 'undefined' && window.__AI_EXPORTER_VERSION__ && window.__AI_EXPORTER_VERSION__ !== CONTENT_SCRIPT_VERSION) {
+    // If a newer version of the script is active in the page, ignore messages in this stale closure
+    return false;
+  }
   if (message.action === 'ping') {
     sendResponse({ pong: true, version: CONTENT_SCRIPT_VERSION });
     return true;
@@ -12,11 +40,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'export_chat') {
     (async () => {
       try {
+        Logger.stage1(`Initiating 3-stage gated chat export for platform: ${message.platform}`);
         const messages = await getChatMessages(message.platform);
         const mathStylesheets = getPageStylesheets();
+        Logger.stage2(`Successfully extracted and verified ${messages.length} conversation turns.`);
         sendResponse({ success: true, messages, mathStylesheets, version: CONTENT_SCRIPT_VERSION });
       } catch (err) {
-        console.error('AI Chat PDF Exporter Scrape Error:', err);
+        Logger.error('Scrape execution halted:', err);
         sendResponse({ success: false, error: err.message || 'Scrape failed' });
       }
     })();
@@ -188,11 +218,15 @@ async function fetchUrlAsBase64(url) {
   try {
     const res = await fetch(cleanUrl, { credentials: 'include' });
     const blob = await res.blob();
-    return new Promise((resolve) => {
-      const reader = new FileReader();
-      reader.onloadend = () => resolve(reader.result);
-      reader.onerror = () => resolve(cleanUrl);
-      reader.readAsDataURL(blob);
+    return await new Promise((resolve) => {
+      try {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result || cleanUrl);
+        reader.onerror = () => resolve(cleanUrl);
+        reader.readAsDataURL(blob);
+      } catch (err) {
+        resolve(cleanUrl);
+      }
     });
   } catch (e) {
     console.warn('Failed to fetch URL as base64:', cleanUrl, e);
@@ -963,10 +997,28 @@ function normalizeGeminiTurn(clone, role) {
   if (!clone) return;
 
   // 1. Remove Gemini UI action bars, draft pickers, and tool drawers
+  // NOTE: Never remove response content containers (.single-draft-response-container, markdown, etc.)!
   clone.querySelectorAll(
-    '.message-actions, button-row, .action-row, .action-area, [data-testid*="draft" i], ' +
-    '[class*="draft" i], .export-menu, .response-feedback, .response-container-header, .response-container-footer'
-  ).forEach(el => el.remove());
+    '.message-actions, button-row, .action-row, .action-area, .draft-picker, ' +
+    '[class*="draft-picker" i], [class*="draft-select" i], [data-testid*="draft-picker" i], ' +
+    '.draft-actions, .export-menu, .response-feedback, .response-container-header, .response-container-footer'
+  ).forEach(el => {
+    // Safety check: Never delete a container that holds the actual response message or markdown
+    if (el.matches && (el.matches('.single-draft-response-container, [class*="single-draft" i]') ||
+        el.querySelector('message-content, structured-content-container, response-element, model-response-content, .markdown, [class*="model-response-text" i], table, pre'))) {
+      return;
+    }
+    el.remove();
+  });
+
+  // Remove "Gemini said" internal screen-reader header if present
+  if (role === 'assistant') {
+    clone.querySelectorAll('.model-title, [class*="model-title" i]').forEach(el => {
+      if (/^gemini(\s+said)?$/i.test(el.textContent.trim())) {
+        el.remove();
+      }
+    });
+  }
 
   // 2. On user turns, remove Gemini duplicate internal preview title (<h5>)
   // Gemini renders an <h5> (often ending in an ellipsis "…") as an internal preview/card header
@@ -994,10 +1046,20 @@ function normalizeGeminiTurn(clone, role) {
 function getUniqueElements(elements) {
   const arr = Array.from(elements);
   return arr.filter(el => {
+    // If el contains multiple other candidate items in arr, el is a container list; discard el in favor of individual items
+    const childCandidatesCount = arr.filter(other => other !== el && el.contains && el.contains(other)).length;
+    if (childCandidatesCount > 1) {
+      return false;
+    }
+    // If an ancestor of el is also in arr:
     let parent = el.parentElement;
     while (parent) {
       if (arr.includes(parent)) {
-        return false;
+        const parentChildCount = arr.filter(other => other !== parent && parent.contains && parent.contains(other)).length;
+        // If the ancestor contains only this single candidate (redundant 1:1 wrapper), discard this child in favor of the ancestor
+        if (parentChildCount === 1) {
+          return false;
+        }
       }
       parent = parent.parentElement;
     }
@@ -1078,10 +1140,14 @@ function deepCloneWithShadowsAndSvgs(originalNode) {
   return clone;
 }
 
-// Check if an element or its descendants have a distinct user bubble background color (blue, gray, dark pill, etc.)
+// Check if an element has a distinct authentic user bubble background color (blue, purple pill)
 function hasUserBubbleStyle(el) {
   if (!el) return false;
   try {
+    // Elements with rich assistant content are never user bubbles
+    if (el.querySelector && el.querySelector('pre, table, .markdown, .prose, .ak-renderer-document, code.hljs')) {
+      return false;
+    }
     const cs = window.getComputedStyle(el);
     const bg = cs.backgroundColor || '';
     if (bg && bg !== 'transparent' && bg !== 'rgba(0, 0, 0, 0)') {
@@ -1091,13 +1157,11 @@ function hasUserBubbleStyle(el) {
         const g = parseInt(match[2], 10);
         const b = parseInt(match[3], 10);
         // Blue bubble: primary Atlaskit #0c66e4 is rgb(12, 102, 228), #0052cc is rgb(0, 82, 204), #0065ff is rgb(0, 101, 255)
-        if (b > 130 && b > r + 15 && b > g + 15) return true;
-        // Dark gray/charcoal bubble in light mode or distinct pill in dark mode
-        if (r === g && g === b && (r < 60 || (r > 220 && r < 250))) return true;
+        if (b > 130 && b > r + 20 && b > g + 20) return true;
+        // Purple bubble: e.g. #7c3aed
+        if (r > 100 && b > 180 && b > g + 30 && r > g + 30) return true;
       }
     }
-    const radius = parseFloat(cs.borderRadius) || 0;
-    if (radius >= 10 && cs.display !== 'inline' && bg && bg !== 'transparent' && bg !== 'rgba(0, 0, 0, 0)') return true;
   } catch (e) {}
   return false;
 }
@@ -1114,7 +1178,11 @@ function isUserTurn(el) {
   const tagName = el.tagName ? el.tagName.toLowerCase() : '';
   if (tagName === 'user-query') return true;
   if (tagName === 'model-response' || tagName === 'message-content' || tagName === 'response-container' || tagName === 'structured-content-container') return false;
-  if (el.className && typeof el.className === 'string' && (el.className.includes('presented-response') || el.className.includes('response-container'))) return false;
+  if (el.className && typeof el.className === 'string' && (el.className.includes('presented-response') || el.className.includes('response-container') || el.className.includes('model-response'))) return false;
+
+  // Rich assistant structures are never user turns unless explicitly tagged author="user"
+  if (el.classList && el.classList.contains('ak-renderer-document')) return false;
+  if (el.querySelector && el.querySelector('.ak-renderer-document, table, pre, code.hljs')) return false;
 
   const hasAsstChild = el.querySelector && el.querySelector(
     '[data-message-author-role="assistant"], model-response, message-content, response-container, [class*="presented-response" i], [class*="response-container" i], [class*="model-response" i], .markdown, div[class*="markdown" i]'
@@ -1127,8 +1195,6 @@ function isUserTurn(el) {
   if (hasUserChild) return true;
   if (hasAsstChild) return false;
   if (el.closest && el.closest('[data-message-author-role="user"]')) return true;
-  if (el.classList && el.classList.contains('ak-renderer-document')) return false;
-  if (el.querySelector && el.querySelector('.ak-renderer-document')) return false;
 
   // 2. Explicit User testid or class markers (excluding parent message containers that also match 'assistant' or 'agent')
   const testId = (el.getAttribute('data-testid') || '').toLowerCase();
@@ -1150,27 +1216,11 @@ function isUserTurn(el) {
     }
   }
 
-  // 3. User bubble styling (Blue bubble / dark pill on el, ancestor, or any child)
+  // 3. User bubble styling (Blue bubble on el or direct parent)
   if (hasUserBubbleStyle(el)) return true;
   if (el.parentElement && hasUserBubbleStyle(el.parentElement)) return true;
   if (el.closest && (el.closest('[style*="rgb(12, 102, 228)"]') || el.closest('[style*="rgb(0, 82, 204)"]') || el.closest('[style*="rgb(0, 101, 255)"]'))) {
     return true;
-  }
-  try {
-    const cs = window.getComputedStyle(el);
-    const col = cs.color || '';
-    if (/rgba?\(25[0-5],\s*25[0-5],\s*25[0-5]/.test(col) && el.textContent.trim().length > 0) {
-      if (hasUserBubbleStyle(el)) {
-        return true;
-      }
-    }
-  } catch (e) {}
-
-  if (el.querySelectorAll) {
-    const bubbles = el.querySelectorAll('div, section, p, span');
-    for (let i = 0; i < Math.min(bubbles.length, 15); i++) {
-      if (hasUserBubbleStyle(bubbles[i])) return true;
-    }
   }
 
   // 4. Layout alignment (right-aligned user bubbles)
@@ -1209,14 +1259,23 @@ function classifyTurnRole(el, index = 0, totalTurns = 1) {
       /\b(assistant|agent|model-response|message-content|response-container|bot-message|rovo)\b/i.test(testId) ||
       className.includes('model-response-text') ||
       className.includes('presented-response') ||
-      className.includes('response-container')) {
+      className.includes('response-container') ||
+      className.includes('single-draft-response')) {
     return 'assistant';
   }
 
-  // 4. Prioritize user turn detection
+  // 4. Prioritize explicit user turn markers
   if (isUserTurn(el)) return 'user';
 
-  if (el.classList.contains('ak-renderer-document') || (el.querySelector && el.querySelector('.ak-renderer-document'))) {
+  // 5. Rich Assistant Content Fingerprint (Tables, Code Blocks, Prose, Math, Smart Links)
+  const hasCodeBlock = el.querySelector && el.querySelector('pre, code.hljs, [class*="code-block" i]') !== null;
+  const hasTable = el.querySelector && el.querySelector('table') !== null;
+  const hasMath = el.querySelector && el.querySelector('.katex, .MathJax, [data-math]') !== null;
+  const hasSources = el.querySelector && el.querySelector('[data-testid*="source" i], [class*="source" i], [class*="citation" i]') !== null;
+  const hasMarkdown = el.querySelector && el.querySelector('.markdown, [class*="markdown" i], .prose:not([class*="query" i])') !== null;
+  const hasAkRenderer = (el.classList && el.classList.contains('ak-renderer-document')) || (el.querySelector && el.querySelector('.ak-renderer-document') !== null);
+
+  if (hasAkRenderer || hasMarkdown || hasCodeBlock || hasTable || hasMath || hasSources) {
     return 'assistant';
   }
 
@@ -1226,19 +1285,7 @@ function classifyTurnRole(el, index = 0, totalTurns = 1) {
     return 'user';
   }
 
-  // 4. Rich Markdown / Assistant Content Fingerprint
-  const hasCodeBlock = el.querySelector && el.querySelector('pre, code.hljs, [class*="code-block" i]') !== null;
-  const hasTable = el.querySelector && el.querySelector('table') !== null;
-  const hasMath = el.querySelector && el.querySelector('.katex, .MathJax, [data-math]') !== null;
-  const hasHeadings = el.querySelector && el.querySelector('h1, h2, h3, h4, h5, h6') !== null;
-  const hasSources = el.querySelector && el.querySelector('[data-testid*="source" i], [class*="source" i], [class*="citation" i]') !== null;
-  const hasMarkdown = el.querySelector && el.querySelector('.markdown, .prose, [class*="markdown" i], [class*="prose" i]') !== null;
-
-  if (hasMarkdown || hasCodeBlock || hasTable || hasMath || hasHeadings || hasSources) {
-    return 'assistant';
-  }
-
-  // 5. Tie-breaker via alternating rhythm parity
+  // 6. Tie-breaker via alternating rhythm parity
   return index % 2 === 0 ? 'user' : 'assistant';
 }
 
@@ -1446,28 +1493,245 @@ function extractChatGPTShareMessages() {
 
 }
 
+// Extract ChatGPT live web application content (robust multi-variant discovery)
+function extractChatGPTLiveMessages(root = document) {
+  const extracted = [];
+  const url = typeof window !== 'undefined' && window.location ? window.location.href : '';
+  const isShare = url.includes('/share/');
+
+  // 0. Share page extraction if URL is /share/
+  if (isShare) {
+    const shareTurns = extractChatGPTShareMessages();
+    if (shareTurns.length > 0) return shareTurns;
+  }
+
+  const isInsideComposerOrNav = (el) => {
+    if (!el) return true;
+    if (el.closest && el.closest('form:not([class*="message"]), nav, aside, [data-testid="composer"], [data-testid*="sidebar" i], [aria-label*="sidebar" i]')) {
+      return true;
+    }
+    return false;
+  };
+
+  // 1. Explicit author role elements
+  const explicit = Array.from(root.querySelectorAll('[data-message-author-role="user"], [data-message-author-role="assistant"]'))
+    .filter(el => !isInsideComposerOrNav(el));
+  if (explicit.length > 0) {
+    const uniqueExplicit = getUniqueElements(explicit);
+    Logger.stage2(`Matched ${uniqueExplicit.length} explicit author-role ChatGPT turns.`);
+    return uniqueExplicit.map(el => ({
+      role: (el.getAttribute('data-message-author-role') || '').toLowerCase(),
+      contentEl: el
+    }));
+  }
+
+  // 2. Conversation turn cards / containers
+  const turnContainers = Array.from(root.querySelectorAll(
+    'article, [data-testid^="conversation-turn-"], [data-testid*="conversation-turn" i], div[class*="conversation-turn" i], div[class*="agent-turn" i], div[class*="user-turn" i]'
+  )).filter(el => !isInsideComposerOrNav(el));
+
+  if (turnContainers.length > 0) {
+    const uniqueTurns = getUniqueElements(turnContainers);
+    Logger.stage2(`Matched ${uniqueTurns.length} ChatGPT turn containers.`);
+    for (let i = 0; i < uniqueTurns.length; i++) {
+      const art = uniqueTurns[i];
+      const userSub = art.querySelector('[data-message-author-role="user"], .font-user-message, div[class*="user-message" i], div[class*="user_message" i], .whitespace-pre-wrap');
+      const asstSub = art.querySelector('[data-message-author-role="assistant"], .markdown, div[class*="markdown" i], [class*="agent-turn" i], .prose');
+      if (userSub && asstSub && userSub !== asstSub && !asstSub.contains(userSub) && !userSub.contains(asstSub)) {
+        extracted.push({ role: 'user', contentEl: userSub });
+        extracted.push({ role: 'assistant', contentEl: asstSub });
+      } else {
+        const role = classifyTurnRole(art, i, uniqueTurns.length);
+        const contentEl = (role === 'assistant' ? (asstSub || art) : (userSub || art));
+        extracted.push({ role, contentEl });
+      }
+    }
+    if (extracted.length > 0) return extracted;
+  }
+
+  // 3. Fallback: Direct Content Block Walker inside main
+  // In ChatGPT, all assistant messages contain .markdown / .prose, and user messages contain .whitespace-pre-wrap
+  const mainEl = root.querySelector('main, [role="main"]') || root.body || root;
+  const markdownBlocks = Array.from(mainEl.querySelectorAll('.markdown, div[class*="markdown" i], .prose'))
+    .filter(el => !isInsideComposerOrNav(el));
+
+  if (markdownBlocks.length > 0) {
+    Logger.stage2(`Found ${markdownBlocks.length} markdown response blocks in ChatGPT main.`);
+    const userBlocks = Array.from(mainEl.querySelectorAll('.whitespace-pre-wrap, div[class*="user" i], .font-user-message'))
+      .filter(el => !isInsideComposerOrNav(el) && !markdownBlocks.some(mb => mb.contains(el)));
+
+    const allCandidateNodes = [];
+    userBlocks.forEach(u => allCandidateNodes.push({ role: 'user', contentEl: u }));
+    markdownBlocks.forEach(m => allCandidateNodes.push({ role: 'assistant', contentEl: m }));
+
+    // If user prompt blocks weren't captured by class, look for preceding siblings
+    if (userBlocks.length === 0) {
+      for (const mb of markdownBlocks) {
+        let p = mb.parentElement;
+        while (p && p !== mainEl) {
+          if (p.previousElementSibling && !p.previousElementSibling.querySelector('.markdown') && p.previousElementSibling.textContent.trim().length > 0) {
+            allCandidateNodes.push({ role: 'user', contentEl: p.previousElementSibling });
+            break;
+          }
+          p = p.parentElement;
+        }
+      }
+    }
+
+    allCandidateNodes.sort((a, b) => {
+      if (a.contentEl && b.contentEl && a.contentEl.compareDocumentPosition) {
+        const pos = a.contentEl.compareDocumentPosition(b.contentEl);
+        if (pos & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
+        if (pos & Node.DOCUMENT_POSITION_PRECEDING) return 1;
+      }
+      return 0;
+    });
+
+    for (const item of allCandidateNodes) {
+      if (item.contentEl && item.contentEl.textContent.trim().length > 0) {
+        extracted.push(item);
+      }
+    }
+    if (extracted.length > 0) return extracted;
+  }
+
+  // 4. Share page fallback if URL is /share/
+  if (isShare) {
+    return extractChatGPTShareMessages();
+  }
+
+  return extracted;
+}
+
+// Extract Gemini live web application content (pairwise .conversation-container cards and elements)
+function extractGeminiLiveMessages(root = document) {
+  const extracted = [];
+  const containers = Array.from(root.querySelectorAll('.conversation-container, div[class*="conversation-container" i], [class*="conversation-turn" i], [class*="chat-turn" i]'));
+  Logger.stage2(`Inspecting ${containers.length} live conversation container elements...`);
+
+  const processedElements = new Set();
+
+  if (containers.length > 0) {
+    for (let i = 0; i < containers.length; i++) {
+      const c = containers[i];
+      const userEl = c.querySelector('user-query');
+      let asstEl = c.querySelector('message-content') ||
+                   c.querySelector('structured-content-container') ||
+                   c.querySelector('model-response') ||
+                   c.querySelector('response-container') ||
+                   c.querySelector('[class*="presented-response" i]') ||
+                   c.querySelector('[class*="model-response-text" i]') ||
+                   c.querySelector('.markdown, div[class*="markdown" i]');
+
+      // Direct sibling walk within conversation card if not found by selector
+      if (!asstEl && userEl) {
+        let sib = userEl.nextElementSibling;
+        while (sib) {
+          if (!sib.matches('user-query') && sib.textContent.trim().length > 0) {
+            asstEl = sib;
+            break;
+          }
+          sib = sib.nextElementSibling;
+        }
+      }
+
+      if (userEl) {
+        processedElements.add(userEl);
+        extracted.push({ role: 'user', contentEl: userEl });
+      }
+      if (asstEl) {
+        processedElements.add(asstEl);
+        const deepContent = asstEl.querySelector('message-content, structured-content-container, [class*="presented-response" i], .markdown');
+        extracted.push({ role: 'assistant', contentEl: deepContent || asstEl });
+      }
+
+      Logger.stage2(`[Live Card ${i + 1}/${containers.length}] Q: ${userEl ? 'found (<' + userEl.tagName + '>)' : 'MISSING'}, A: ${asstEl ? 'found (<' + asstEl.tagName + '>, ' + asstEl.textContent.trim().length + ' chars)' : 'MISSING'}`);
+    }
+  }
+
+  // Safety check: capture any user-query elements outside standard container wrappers (e.g. initial turn or custom wrappers)
+  const allUserQueries = Array.from(root.querySelectorAll('user-query'));
+  const uncapturedQueries = allUserQueries.filter(el => !processedElements.has(el) && !Array.from(processedElements).some(p => p.contains(el) || el.contains(p)));
+  if (uncapturedQueries.length > 0) {
+    Logger.stage2(`Found ${uncapturedQueries.length} uncaptured user-query elements outside containers. Capturing...`);
+    for (const uq of uncapturedQueries) {
+      extracted.push({ role: 'user', contentEl: uq });
+      let sib = uq.nextElementSibling;
+      let foundAsst = null;
+      while (sib) {
+        if (sib.matches && (sib.matches('model-response, response-container, message-content, [class*="model-response" i]') || sib.querySelector('model-response, response-container, message-content'))) {
+          foundAsst = sib;
+          break;
+        }
+        sib = sib.nextElementSibling;
+      }
+      if (foundAsst) {
+        const deep = foundAsst.querySelector('message-content, structured-content-container, .markdown') || foundAsst;
+        extracted.push({ role: 'assistant', contentEl: deep });
+      }
+    }
+  }
+
+  return extracted;
+}
+
 // Extract Gemini /share/ public page content (DOM pairwise structure)
 function extractGeminiShareMessages(root = document) {
   const extracted = [];
   const viewers = root.querySelectorAll('share-turn-viewer');
+  Logger.stage2(`Inspecting ${viewers.length} <share-turn-viewer> elements...`);
+
   if (viewers.length > 0) {
     for (let i = 0; i < viewers.length; i++) {
       const v = viewers[i];
       const userEl = v.querySelector('user-query');
-      const asstEl = v.querySelector('message-content') || 
-                     v.querySelector('response-container') ||
-                     v.querySelector('[class*="presented-response" i]') ||
-                     v.querySelector('[class*="response-container" i]') ||
-                     v.querySelector('structured-content-container') ||
-                     v.querySelector('model-response') ||
-                     v.querySelector('[class*="model-response-text" i]') || 
-                     v.querySelector('.markdown, div[class*="markdown" i]');
+      let asstEl = v.querySelector('message-content') || 
+                   v.querySelector('response-container') ||
+                   v.querySelector('[class*="presented-response" i]') ||
+                   v.querySelector('[class*="response-container" i]') ||
+                   v.querySelector('structured-content-container') ||
+                   v.querySelector('model-response') ||
+                   v.querySelector('[class*="model-response-text" i]') || 
+                   v.querySelector('.markdown, div[class*="markdown" i]') ||
+                   v.querySelector('[class*="response" i]');
+
+      // Check shadowRoot if not found in light DOM
+      if (!asstEl && v.shadowRoot) {
+        asstEl = v.shadowRoot.querySelector('message-content, response-container, [class*="presented-response" i], structured-content-container, model-response, .markdown');
+      }
+
+      // Check siblings within viewer container (Angular custom element slot or wrapper)
+      if (!asstEl && userEl) {
+        let sib = userEl.nextElementSibling;
+        while (sib) {
+          if (!sib.matches('user-query') && sib.textContent.trim().length > 0) {
+            asstEl = sib;
+            break;
+          }
+          sib = sib.nextElementSibling;
+        }
+      }
+
+      // Check viewer's next sibling if asstEl was mounted outside viewer
+      if (!asstEl) {
+        let sib = v.nextElementSibling;
+        while (sib) {
+          if (!sib.matches('share-turn-viewer') && sib.textContent.trim().length > 0) {
+            asstEl = sib;
+            break;
+          }
+          sib = sib.nextElementSibling;
+        }
+      }
+
       if (userEl) {
         extracted.push({ role: 'user', contentEl: userEl });
       }
       if (asstEl) {
         extracted.push({ role: 'assistant', contentEl: asstEl });
       }
+
+      Logger.stage2(`[Viewer ${i + 1}/${viewers.length}] Q: ${userEl ? 'found (<' + userEl.tagName + '>)' : 'MISSING'}, A: ${asstEl ? 'found (<' + asstEl.tagName + '>, ' + asstEl.textContent.trim().length + ' chars)' : 'MISSING'}`);
     }
   }
   return extracted;
@@ -1528,8 +1792,7 @@ function extractAdaptiveTurns(root = document.body) {
     '.prose',
     'div[class*="message" i]',
     'div[class*="chat-turn" i]',
-    'div[class*="bubble" i]',
-    'div[class*="row" i]'
+    'div[class*="bubble" i]'
   ];
 
   const rawCandidates = Array.from(root.querySelectorAll(candidateSelectors.join(', ')))
@@ -1554,32 +1817,63 @@ function extractAdaptiveTurns(root = document.body) {
 
 // Helper to find the actual scrollable conversation container
 function findChatScrollContainer() {
-  // 1. Walk up from any rendered message or document
+  // 1. Walk up from any rendered message or document, strictly avoiding sidebars
   const sample = document.querySelector(
-    '.ak-renderer-document, [data-testid*="message" i], [class*="message" i], [class*="bubble" i], [data-testid*="user-message" i], user-query, message-content, model-response'
+    'article, [data-testid*="conversation-turn" i], [data-message-author-role], .markdown, div[class*="markdown" i], [data-message-id], .ak-renderer-document, [data-testid*="message" i], [class*="message" i], [class*="bubble" i], [data-testid*="user-message" i], user-query, message-content, model-response, .conversation-container, div[class*="conversation-container" i]'
   );
   if (sample) {
     let p = sample.parentElement;
     while (p && p !== document.body && p !== document.documentElement) {
+      if (p.closest && p.closest('nav, aside, [aria-label*="sidebar" i], [data-testid*="sidebar" i]')) {
+        p = p.parentElement;
+        continue;
+      }
       const style = window.getComputedStyle(p);
       const ov = style.overflowY || style.overflow;
-      if (/(auto|scroll)/.test(ov) && p.scrollHeight > p.clientHeight + 40) {
+      if (/(auto|scroll|overlay)/.test(ov) && p.scrollHeight > p.clientHeight + 40) {
         return p;
       }
       p = p.parentElement;
     }
   }
 
-  // 2. Scan all block elements with scrollable overflow
-  const candidates = Array.from(document.querySelectorAll('div, main, section'));
+  // Direct check for known chat scroller tags/classes inside main
+  const knownScroller = document.querySelector('main infinite-scroller, main [class*="infinite-scroller" i], main [class*="chat-history" i], main chat-window, main [class*="chat-scroll" i], main [class*="react-scroll-to-bottom" i], infinite-scroller, [class*="react-scroll-to-bottom" i]');
+  if (knownScroller && knownScroller.scrollHeight > knownScroller.clientHeight + 40) {
+    const style = window.getComputedStyle(knownScroller);
+    const ov = style.overflowY || style.overflow;
+    if (/(auto|scroll|overlay)/.test(ov)) {
+      return knownScroller;
+    }
+  }
+
+  // 2. Scan all block elements with scrollable overflow inside main FIRST
+  const mainEl = document.querySelector('main, [role="main"]');
+  const mainCandidates = mainEl ? Array.from(mainEl.querySelectorAll('div, section, [class*="scroller" i]')) : [];
   let best = null;
   let maxDiff = 0;
+  for (const el of mainCandidates) {
+    const diff = el.scrollHeight - el.clientHeight;
+    if (diff > maxDiff && el.clientHeight > 150) {
+      const style = window.getComputedStyle(el);
+      const ov = style.overflowY || style.overflow;
+      if (/(auto|scroll|overlay)/.test(ov)) {
+        best = el;
+        maxDiff = diff;
+      }
+    }
+  }
+  if (best) return best;
+
+  // 3. Fallback across document, strictly avoiding nav and aside sidebars
+  const candidates = Array.from(document.querySelectorAll('div, main, section, infinite-scroller, chat-window, mat-sidenav-content, [class*="scroller" i], [class*="chat" i]'))
+    .filter(el => !el.closest('nav, aside, [aria-label*="sidebar" i], [data-testid*="sidebar" i]'));
   for (const el of candidates) {
     const diff = el.scrollHeight - el.clientHeight;
     if (diff > maxDiff && el.clientHeight > 150) {
       const style = window.getComputedStyle(el);
       const ov = style.overflowY || style.overflow;
-      if (/(auto|scroll)/.test(ov)) {
+      if (/(auto|scroll|overlay)/.test(ov)) {
         best = el;
         maxDiff = diff;
       }
@@ -1599,11 +1893,13 @@ class ChatMountEngine {
       stepFraction: 0.7,
       stepMin: 350,
       stepDelayMs: 60,
-      initialTopDelayMs: 150
+      initialTopDelayMs: 400,
+      maxUpwardIterations: 12
     }, options);
   }
 
   async sweep() {
+    Logger.stage1('Starting dynamic conversational mount sweep...');
     try {
       window.dispatchEvent(new Event('beforeprint'));
     } catch (e) {}
@@ -1619,48 +1915,123 @@ class ChatMountEngine {
     const clientHeight = innerScroller && !isDoc ? innerScroller.clientHeight : window.innerHeight;
     let totalTraversed = 0;
 
+    Logger.stage1(`Active scroll container: <${innerScroller ? innerScroller.tagName : 'WINDOW'}${innerScroller && innerScroller.className ? '.' + String(innerScroller.className).slice(0, 40) : ''}>, clientHeight: ${clientHeight}`);
+
+    const scrollBothTo = (top) => {
+      try {
+        if (innerScroller && innerScroller !== document.documentElement && innerScroller !== document.body) {
+          innerScroller.scrollTop = top;
+          innerScroller.dispatchEvent(new Event('scroll', { bubbles: true }));
+        }
+        window.scrollTo({ top, behavior: 'instant' });
+        window.dispatchEvent(new Event('scroll'));
+        if (document.documentElement) {
+          document.documentElement.scrollTop = top;
+        }
+        if (document.body) {
+          document.body.scrollTop = top;
+        }
+      } catch (e) {}
+    };
+
+    const getTurnCount = () => {
+      return document.querySelectorAll(
+        '.conversation-container, div[class*="conversation-container" i], user-query, [data-testid*="message" i], [class*="message" i], [class*="chat-turn" i], [class*="bubble" i], [data-message-author-role]'
+      ).length;
+    };
+
+    const getFirstTurnSignature = () => {
+      const first = document.querySelector(
+        '.conversation-container, div[class*="conversation-container" i], user-query, [data-testid*="message" i], [class*="chat-turn" i]'
+      );
+      return first ? (first.id || first.textContent.trim().slice(0, 80)) : '';
+    };
+
+    const getScrollHeight = () => {
+      return innerScroller && !isDoc ? innerScroller.scrollHeight : (document.documentElement ? document.documentElement.scrollHeight : 0);
+    };
+
     try {
-      // 1. Scroll to top on both window and inner scroller
-      window.scrollTo({ top: 0, behavior: 'instant' });
-      if (innerScroller && !isDoc) {
-        innerScroller.scrollTop = 0;
+      // 1. UPWARD MOUNT CONVERGENCE LOOP:
+      // In virtualized chats (Gemini, ChatGPT, etc.), older history is dynamically prepended when scrolled to top.
+      // Pulse to top repeatedly until no new turns or content appear.
+      let prevCount = getTurnCount();
+      let prevFirstSig = getFirstTurnSignature();
+      let prevScrollHeight = getScrollHeight();
+      let stableUpwardRounds = 0;
+
+      Logger.stage1(`Initiating upward mount loop (initial turns: ${prevCount}, scrollHeight: ${prevScrollHeight})...`);
+
+      for (let iteration = 0; iteration < this.options.maxUpwardIterations; iteration++) {
+        scrollBothTo(0);
+
+        // Wait for potential network fetch / rendering of prepended history
+        await new Promise(r => setTimeout(r, iteration === 0 ? this.options.initialTopDelayMs : 300));
+
+        // Check if loading spinner is currently visible
+        const hasSpinner = !!document.querySelector('mat-progress-spinner, mat-spinner, [class*="loading" i], [class*="spinner" i], [role="progressbar"]');
+        if (hasSpinner) {
+          Logger.stage1('[Upward Mount] Loading indicator detected. Waiting for prepended batch to settle...');
+          await new Promise(r => setTimeout(r, 400));
+        }
+
+        const newCount = getTurnCount();
+        const newFirstSig = getFirstTurnSignature();
+        const newScrollHeight = getScrollHeight();
+
+        const prependedTurns = newCount > prevCount;
+        const firstTurnChanged = newFirstSig !== prevFirstSig && newFirstSig.length > 0;
+        const heightExpanded = newScrollHeight > prevScrollHeight + 50;
+
+        if (prependedTurns || firstTurnChanged || heightExpanded) {
+          Logger.stage1(`[Upward Mount Iteration ${iteration + 1}] Detected new earlier content prepended (turns: ${prevCount} -> ${newCount}, height: ${prevScrollHeight} -> ${newScrollHeight}).`);
+          prevCount = newCount;
+          prevFirstSig = newFirstSig;
+          prevScrollHeight = newScrollHeight;
+          stableUpwardRounds = 0;
+        } else {
+          stableUpwardRounds++;
+          // Require at least 2 consecutive stable rounds at scrollTop = 0 to confirm top of chat history reached
+          if (stableUpwardRounds >= (iteration === 0 ? 2 : 1)) {
+            Logger.stage1(`[Upward Mount] Reached top of conversation history after ${iteration + 1} iterations (total turns: ${newCount}).`);
+            break;
+          }
+        }
       }
-      await new Promise(r => setTimeout(r, this.options.initialTopDelayMs));
 
-      // 2. Pre-capture cross-origin iframes
-      await captureCrossoriginIframes();
-
-      // 3. Sweep downwards if scrollable
+      // 2. DOWNWARD SWEEP:
+      // Traverse top-to-bottom so lazy renderers (KaTeX/LaTeX, tables, syntax highlighters, images) hydrate into DOM.
       let scrollHeight = isDoc ? (document.documentElement ? document.documentElement.scrollHeight : 0) : innerScroller.scrollHeight;
       let maxScroll = Math.max(0, scrollHeight - clientHeight);
+      Logger.stage1(`Downward sweep bounds: scrollHeight=${scrollHeight}, maxScroll=${maxScroll}`);
 
       if (maxScroll > 50) {
         let curr = 0;
-        const step = Math.max(this.options.stepMin, Math.floor(clientHeight * this.options.stepFraction));
+        let stepCount = 0;
+        const maxSteps = 15;
+        let step = Math.max(this.options.stepMin, Math.floor(clientHeight * 1.5));
+        if (maxScroll / step > maxSteps) {
+          step = Math.ceil(maxScroll / maxSteps);
+        }
 
         while (curr < maxScroll) {
           curr = Math.min(curr + step, maxScroll);
-          window.scrollTo({ top: curr, behavior: 'instant' });
-          if (innerScroller && !isDoc) {
-            innerScroller.scrollTop = curr;
-          }
+          scrollBothTo(curr);
 
           await new Promise(r => setTimeout(r, this.options.stepDelayMs));
           totalTraversed = curr;
+          stepCount++;
 
           scrollHeight = isDoc ? (document.documentElement ? document.documentElement.scrollHeight : 0) : innerScroller.scrollHeight;
           maxScroll = Math.max(0, scrollHeight - clientHeight);
           if (curr >= maxScroll) break;
         }
+        Logger.stage1(`Completed downward sweep: ${stepCount} steps across ${totalTraversed}px.`);
       }
-
-      await captureCrossoriginIframes();
 
       // GATE 1: Verify Mount Settle
       const gate1 = this.verifyGate1({ isDoc, totalTraversed, maxScroll });
-      if (!gate1.passed) {
-        console.warn('[GATE 1 WARNING]:', gate1.reason);
-      }
+      Logger.gate('Gate 1 (Mount Sweep)', gate1.passed, gate1.reason);
 
       return { success: true, totalTraversed, gate1, savedScroll, hiddenOverlays };
     } finally {
@@ -1694,55 +2065,13 @@ class ChatInventoryEngine {
 
   async inspect(platform) {
     const url = typeof window !== 'undefined' && window.location ? window.location.href : '';
+    Logger.stage2(`Inspecting chat elements for platform: ${platform} (URL: ${url})`);
 
     let candidateTurns = [];
 
     // 1. Platform-specific island discovery
-    if (platform === 'Gemini' || url.includes('gemini.google') || document.querySelectorAll('share-turn-viewer').length > 0) {
-      const isShare = url.includes('/share/') || url.includes('share.gemini.google') || document.querySelectorAll('share-turn-viewer').length > 0;
-      if (isShare) {
-        const shareTurns = extractGeminiShareMessages(document);
-        if (shareTurns.length > 0) {
-          candidateTurns = shareTurns;
-        }
-      }
-      if (candidateTurns.length === 0) {
-        const liveElements = Array.from(document.querySelectorAll(
-          'user-query, response-container, [class*="presented-response" i], [class*="response-container" i], ' +
-          'structured-content-container, message-content, model-response, [class*="model-response-text" i], ' +
-          '[class*="query-text" i], .query-text-container, .model-response-container'
-        ));
-        const unique = getUniqueElements(liveElements);
-        candidateTurns = unique.map((el, i) => ({
-          role: classifyTurnRole(el, i, unique.length),
-          contentEl: el
-        }));
-      }
-    } else if (platform === 'ChatGPT' || url.includes('chatgpt.com') || url.includes('chat.openai.com')) {
-      const isShare = url.includes('/share/');
-      const explicit = Array.from(document.querySelectorAll('[data-message-author-role="user"], [data-message-author-role="assistant"]'));
-      if (explicit.length > 0) {
-        candidateTurns = explicit.map(el => ({
-          role: (el.getAttribute('data-message-author-role') || '').toLowerCase(),
-          contentEl: el
-        }));
-      } else {
-        const articles = Array.from(document.querySelectorAll('article, [data-testid*="conversation-turn"]'));
-        if (articles.length > 0) {
-          for (const art of articles) {
-            const userSub = art.querySelector('[data-message-author-role="user"], .font-user-message, div[class*="user-message" i], div[class*="user_message" i]');
-            const asstSub = art.querySelector('[data-message-author-role="assistant"], .markdown, div[class*="markdown" i], [class*="agent-turn" i]');
-            if (userSub && asstSub && userSub !== asstSub) {
-              candidateTurns.push({ role: 'user', contentEl: userSub });
-              candidateTurns.push({ role: 'assistant', contentEl: asstSub });
-            } else {
-              candidateTurns.push({ role: classifyTurnRole(art, candidateTurns.length), contentEl: art });
-            }
-          }
-        } else if (isShare) {
-          candidateTurns = extractChatGPTShareMessages();
-        }
-      }
+    if (platform === 'ChatGPT' || url.includes('chatgpt.com') || url.includes('chat.openai.com')) {
+      candidateTurns = extractChatGPTLiveMessages(document);
     } else if (platform === 'Claude' || url.includes('claude.ai')) {
       const claudeEls = Array.from(document.querySelectorAll(
         '.font-user-message, .font-claude-message, [data-testid="user-message"], [data-testid="assistant-message"], ' +
@@ -1750,11 +2079,13 @@ class ChatInventoryEngine {
         'div[class*="assistant-message"], .user-message, .claude-message'
       ));
       const unique = getUniqueElements(claudeEls);
+      Logger.stage2(`Matched ${unique.length} Claude message elements.`);
       candidateTurns = unique.map((el, i) => ({
         role: classifyTurnRole(el, i, unique.length),
         contentEl: el
       }));
     } else if (platform === 'Perplexity' || url.includes('perplexity.ai')) {
+      Logger.stage2('Extracting Perplexity questions and answers...');
       candidateTurns = extractPerplexityMessages();
     } else if (platform === 'Rovo' || url.includes('atlassian')) {
       const isComposerOrToolbar = (el) => {
@@ -1788,6 +2119,7 @@ class ChatInventoryEngine {
       ].join(', ');
       const rovoEls = Array.from(document.querySelectorAll(rovoSelectors)).filter(el => !isComposerOrToolbar(el));
       const unique = getUniqueElements(rovoEls);
+      Logger.stage2(`Matched ${unique.length} Rovo conversational items.`);
       candidateTurns = unique.map((el, i) => ({
         role: classifyTurnRole(el, i, unique.length),
         contentEl: el
@@ -1797,16 +2129,61 @@ class ChatInventoryEngine {
         'div[class*="message" i], div[class*="bubble" i], div[class*="chat-turn" i], div[data-testid*="message" i]'
       ));
       const unique = getUniqueElements(grokEls);
+      Logger.stage2(`Matched ${unique.length} Grok message elements.`);
       candidateTurns = unique.map((el, i) => ({
         role: classifyTurnRole(el, i, unique.length),
         contentEl: el
       }));
+    } else if (platform === 'Gemini' || url.includes('gemini.google') || document.querySelectorAll('share-turn-viewer').length > 0 || document.querySelectorAll('.conversation-container, div[class*="conversation-container" i]').length > 0) {
+      const isShare = url.includes('/share/') || url.includes('share.gemini.google') || document.querySelectorAll('share-turn-viewer').length > 0;
+      if (isShare) {
+        Logger.stage2('Using Gemini share page viewer extractor...');
+        const shareTurns = extractGeminiShareMessages(document);
+        const hasAsst = shareTurns.some(t => t.role === 'assistant');
+        if (shareTurns.length > 0 && hasAsst) {
+          candidateTurns = shareTurns;
+          Logger.stage2(`Extracted ${shareTurns.length} pairwise turns from share-turn-viewer.`);
+        }
+      }
+      if (candidateTurns.length === 0) {
+        // Live Gemini conversation-container turn cards
+        const liveTurns = extractGeminiLiveMessages(document);
+        const hasAsst = liveTurns.some(t => t.role === 'assistant');
+        if (liveTurns.length > 0 && hasAsst) {
+          candidateTurns = liveTurns;
+          Logger.stage2(`Extracted ${liveTurns.length} pairwise turns from live Gemini conversation-container cards.`);
+        }
+      }
+      if (candidateTurns.length === 0) {
+        Logger.stage2('Querying live Gemini elements from light and custom element DOM...');
+        const liveElements = Array.from(document.querySelectorAll(
+          'user-query, response-container, [class*="presented-response" i], [class*="response-container" i], ' +
+          '[class*="single-draft-response" i], .single-draft-response-container, ' +
+          'structured-content-container, message-content, model-response, [class*="model-response-text" i], ' +
+          '[class*="query-text" i], .query-text-container, .model-response-container'
+        ));
+        const unique = getUniqueElements(liveElements);
+        candidateTurns = unique.map((el, i) => ({
+          role: classifyTurnRole(el, i, unique.length),
+          contentEl: el
+        }));
+        Logger.stage2(`Matched ${unique.length} unique Gemini live elements.`);
+      }
+    }
+
+    // Dynamic mount retry if primary discovery yielded 0 turns (e.g. freshly reloaded tab)
+    if (candidateTurns.length === 0 && (platform === 'ChatGPT' || url.includes('chatgpt.com') || url.includes('chat.openai.com'))) {
+      Logger.stage2('Primary discovery yielded 0 turns on ChatGPT. Waiting 800ms for dynamic messages mount...');
+      await new Promise(r => setTimeout(r, 800));
+      candidateTurns = extractChatGPTLiveMessages(document);
     }
 
     // Universal Adaptive Turn Discovery fallback if primary query yielded nothing
     if (candidateTurns.length === 0) {
+      Logger.stage2('Primary discovery yielded 0 turns. Running Universal Adaptive Turn Discovery...');
       const adaptive = extractAdaptiveTurns(document.body);
       candidateTurns = adaptive.map(t => ({ role: t.role, contentEl: t.contentEl }));
+      Logger.stage2(`Adaptive Turn Discovery identified ${candidateTurns.length} candidate turns.`);
     }
 
     // 2. Sort candidate turns strictly by natural loaded DOM document order
@@ -1821,6 +2198,41 @@ class ChatInventoryEngine {
     });
 
     // 3. Catalog and normalize each turn & inventory sub-components
+    let { inventory, stats } = await this.buildInventory(candidateTurns, platform, url);
+
+    // GATE 2 INTEGRITY CHECK & SELF-HEALING AUTO-RECOVERY
+    if (stats.userCount > 1 && stats.asstCount === 0) {
+      Logger.recovery(`Detected ${stats.userCount} user questions but 0 assistant responses. Attempting self-healing recovery...`);
+      candidateTurns = this.recoverInterstitialAssistantTurns(candidateTurns);
+      // Rebuild inventory with recovered turns
+      const rebuilt = await this.buildInventory(candidateTurns, platform, url);
+      inventory = rebuilt.inventory;
+      stats = rebuilt.stats;
+      Logger.recovery(`Post-recovery inventory stats: userCount=${stats.userCount}, asstCount=${stats.asstCount}, tables=${stats.tables}, codeBlocks=${stats.codeBlocks}`);
+    }
+
+    // Verify Gate 2
+    const gate2 = this.verifyGate2(inventory, stats);
+    Logger.gate('Gate 2 (Structural Integrity)', gate2.passed, gate2.passed ? `Verified ${stats.userCount} questions, ${stats.asstCount} answers, ${stats.tables} tables, ${stats.codeBlocks} code blocks` : gate2.reason);
+    if (!gate2.passed) {
+      Logger.error('Gate 2 Structural Integrity Check FAILED. Diagnostic dump:', {
+        inventoryCount: inventory.length,
+        userCount: stats.userCount,
+        asstCount: stats.asstCount,
+        candidateTurnsCount: candidateTurns.length
+      });
+      throw new Error(`Gate 2 Integrity Violation: ${gate2.reason}`);
+    }
+
+    return {
+      success: true,
+      turns: inventory,
+      stats,
+      gate2
+    };
+  }
+
+  async buildInventory(candidateTurns, platform, url) {
     const inventory = [];
     const stats = {
       userCount: 0,
@@ -1863,7 +2275,10 @@ class ChatInventoryEngine {
 
       const text = clone.textContent.trim();
       const hasMedia = clone.querySelector('img, canvas, svg, iframe, table');
-      if (!text && !hasMedia) continue;
+      if (!text && !hasMedia) {
+        Logger.stage2(`[Turn ${i + 1}] Filtered out empty turn <${contentEl.tagName}>`);
+        continue;
+      }
 
       // Inventory sub-components in this turn
       const tables = Array.from(clone.querySelectorAll('table'));
@@ -1881,8 +2296,10 @@ class ChatInventoryEngine {
       if (role === 'user') stats.userCount++;
       else stats.asstCount++;
 
+      Logger.stage2(`[Turn ${inventory.length + 1}/${candidateTurns.length}] role: ${role}, tag: <${contentEl.tagName}>, length: ${text.length} chars, tables: ${tables.length}, codeBlocks: ${codeBlocks.length}`);
+
       inventory.push({
-        index: i,
+        index: inventory.length,
         role,
         html: clone.innerHTML,
         contentEl,
@@ -1898,18 +2315,117 @@ class ChatInventoryEngine {
       });
     }
 
-    // 4. GATE 2: Structural Integrity Gate
-    const gate2 = this.verifyGate2(inventory, stats);
-    if (!gate2.passed) {
-      throw new Error(`Gate 2 Integrity Violation: ${gate2.reason}`);
+    return { inventory, stats };
+  }
+
+  recoverInterstitialAssistantTurns(candidateTurns) {
+    Logger.recovery(`Running interstitial recovery on ${candidateTurns.length} candidate turns...`);
+
+    // Pass A: Re-classify turns that have assistant hallmarks
+    let reclassified = 0;
+    for (const turn of candidateTurns) {
+      if (turn.role === 'user' && turn.contentEl) {
+        const el = turn.contentEl;
+        const isExplicitUser = (el.tagName && el.tagName.toLowerCase() === 'user-query') ||
+                               (el.getAttribute('data-message-author-role') || '').toLowerCase() === 'user';
+        if (!isExplicitUser) {
+          const hasAssistantHallmarks = el.querySelector && el.querySelector('pre, table, .markdown, .prose, .ak-renderer-document');
+          if (hasAssistantHallmarks) {
+            turn.role = 'assistant';
+            reclassified++;
+          }
+        }
+      }
     }
 
-    return {
-      success: true,
-      turns: inventory,
-      stats,
-      gate2
-    };
+    if (reclassified > 0) {
+      Logger.recovery(`Reclassified ${reclassified} mislabeled assistant turns.`);
+      if (candidateTurns.some(t => t.role === 'assistant')) {
+        return candidateTurns;
+      }
+    }
+
+    // Pass B: Interstitial DOM discovery between user questions
+    const userTurns = candidateTurns.filter(t => t.role === 'user');
+    Logger.recovery(`Scanning DOM between ${userTurns.length} user questions...`);
+
+    const paired = [];
+    for (let i = 0; i < userTurns.length; i++) {
+      const u = userTurns[i].contentEl;
+      paired.push({ role: 'user', contentEl: u });
+
+      const nextU = (i + 1 < userTurns.length) ? userTurns[i + 1].contentEl : null;
+      let asstEl = null;
+
+      // 1. Container / Island search (strictly for per-turn isolated cards, never the global scroller)
+      const containerCandidate = u.closest('share-turn-viewer, .conversation-container, div[class*="conversation-container" i], [data-testid*="turn" i], [class*="turn" i], [class*="row" i], article');
+      const isGlobalScroller = (c) => !c || c === document.body || c === document.documentElement || (
+        c.matches && (
+          c.matches('infinite-scroller, [class*="chat-history" i], [class*="conversations-list" i], [class*="chat-window" i], main, [role="main"]') &&
+          !c.matches('.conversation-container, div[class*="conversation-container" i], share-turn-viewer')
+        )
+      );
+      const hasOtherUserTurns = (c) => c && (
+        (nextU && c.contains(nextU)) ||
+        c.querySelectorAll('user-query, [data-message-author-role="user"]').length > 1
+      );
+
+      if (containerCandidate && !isGlobalScroller(containerCandidate) && !hasOtherUserTurns(containerCandidate)) {
+        const candidates = Array.from(containerCandidate.querySelectorAll(
+          'response-container, [class*="presented-response" i], [class*="response-container" i], [class*="single-draft-response" i], ' +
+          'message-content, model-response, structured-content-container, .markdown, [class*="markdown" i], ' +
+          '[class*="response" i], [class*="answer" i], .ak-renderer-document, [data-message-author-role="assistant"]'
+        )).filter(el => !el.contains(u) && !u.contains(el));
+
+        if (candidates.length > 0) {
+          asstEl = candidates[candidates.length - 1];
+        }
+      }
+
+      // 2. Direct sibling walk between u and nextU
+      if (!asstEl) {
+        let sib = u.nextElementSibling;
+        while (sib && sib !== nextU) {
+          if (!sib.contains(u) && (!nextU || !sib.contains(nextU)) && sib.textContent.trim().length > 0) {
+            const asstSub = (sib.matches && sib.matches('response-container, [class*="response" i], [class*="presented-response" i], model-response, message-content, structured-content-container, .markdown')) ? sib :
+              sib.querySelector('response-container, [class*="presented-response" i], [class*="response-container" i], [class*="single-draft-response" i], message-content, model-response, structured-content-container, .markdown, [class*="model-response-text" i]');
+            asstEl = asstSub || sib;
+            break;
+          }
+          sib = sib.nextElementSibling;
+        }
+      }
+
+      // 3. Parent tree sibling walk between u and nextU
+      if (!asstEl) {
+        let p = u.parentElement;
+        while (p && p !== document.body && !isGlobalScroller(p)) {
+          let sib = p.nextElementSibling;
+          while (sib && (!nextU || !sib.contains(nextU))) {
+            if (!sib.contains(u) && sib.textContent.trim().length > 0) {
+              const asstSub = (sib.matches && sib.matches('response-container, [class*="response" i], [class*="presented-response" i], model-response, message-content, structured-content-container, .markdown')) ? sib :
+                sib.querySelector('response-container, [class*="presented-response" i], [class*="response-container" i], [class*="single-draft-response" i], message-content, model-response, structured-content-container, .markdown, [class*="model-response-text" i]');
+              asstEl = asstSub || sib;
+              break;
+            }
+            sib = sib.nextElementSibling;
+          }
+          if (asstEl) break;
+          p = p.parentElement;
+        }
+      }
+
+      if (asstEl) {
+        const cleanSub = asstEl.querySelector('message-content, [class*="presented-response" i], .markdown, structured-content-container');
+        const finalAsst = cleanSub || asstEl;
+        paired.push({ role: 'assistant', contentEl: finalAsst });
+        Logger.recovery(`[Turn ${i + 1}/${userTurns.length}] Paired: Q=<${u.tagName}> -> A=<${finalAsst.tagName}> (${finalAsst.textContent.trim().length} chars)`);
+      } else {
+        Logger.recovery(`[Turn ${i + 1}/${userTurns.length}] No interstitial response element found in DOM after question.`);
+      }
+    }
+
+    return paired;
   }
 
   verifyGate2(inventory, stats) {
@@ -1929,15 +2445,33 @@ class ChatInventoryEngine {
 
 // Scrape chat messages by platform through the unified gated pipeline
 async function getChatMessages(platform) {
-  // Stage 1: Mount & Sweep (defer scroll restoration until after inventory inspection)
-  const mountEngine = new ChatMountEngine({ skipRestore: true });
+  Logger.stage1(`Starting getChatMessages for platform: ${platform}`);
+  const inventoryEngine = new ChatInventoryEngine();
+
+  // FAST PATH (Immediate extraction):
+  // If the conversation turns are already present and visible in the DOM (e.g. ChatGPT, Claude, active tab),
+  // capture them directly without triggering scroll sweeps that can unmount or desync virtualized lists.
+  try {
+    const immediateRes = await inventoryEngine.inspect(platform);
+    if (immediateRes && immediateRes.turns && immediateRes.turns.length > 0) {
+      Logger.stage1(`Immediate DOM extraction succeeded: captured ${immediateRes.turns.length} turns without scroll sweep.`);
+      return immediateRes.turns.map(t => ({
+        role: t.role,
+        html: t.html,
+        components: t.components
+      }));
+    }
+  } catch (e) {
+    Logger.stage1(`Immediate inspection did not find complete turns (${e.message}). Proceeding to dynamic mount sweep...`);
+  }
+
+  // SWEEP PATH (Lazy/virtualized chats like Gemini):
+  const mountEngine = new ChatMountEngine({ skipRestore: false });
   const mountResult = await mountEngine.sweep();
 
   try {
-    // Stage 2: Inventory & Inspection
-    const inventoryEngine = new ChatInventoryEngine();
     const inventoryResult = await inventoryEngine.inspect(platform);
-
+    Logger.stage3(`Inventory verified. Preparing ${inventoryResult.turns.length} turns for Markdown converter.`);
     return inventoryResult.turns.map(t => ({
       role: t.role,
       html: t.html,

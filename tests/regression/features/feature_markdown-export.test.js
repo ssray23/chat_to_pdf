@@ -532,6 +532,44 @@ What next?
       expect(cleaned).toContain('Here is the conclusion.');
       expect(cleaned).toContain('And another reference .');
     });
+
+    test('formatStepImagesIntoTables packages sequential recipe step images and instructions into 2-column card tables', () => {
+      const chatData = {
+        platform: 'ChatGPT',
+        title: 'Tamarind Chicken Curry Recipe',
+        messages: [
+          {
+            role: 'user',
+            html: '<div class="whitespace-pre-wrap">Can you show me the chicken curry recipe?</div>'
+          },
+          {
+            role: 'assistant',
+            html: `
+              <div class="markdown">
+                <h3>Tamarind Chicken Curry</h3>
+                <p>Cooking method</p>
+                <p><img src="https://example.com/step1.jpg" alt="Step 1"></p>
+                <p><strong>1. Build the aromatic base</strong><br>Heat the oil over medium heat. Add the methi seeds and let them turn just golden, not brown. Add curry leaves and let them sizzle briefly.</p>
+                <p><img src="https://example.com/step2.jpg" alt="Step 2"></p>
+                <p><strong>2. Fry the masala until thick</strong><br>Add the onion and cook for 5-7 minutes until golden. Add ginger-garlic paste, coriander and turmeric. Stir for 30 seconds.</p>
+              </div>
+            `
+          }
+        ]
+      };
+
+      const result = convertChatToMarkdown(chatData);
+
+      expect(result.markdown).toContain('<table style="border: none; border-collapse: collapse; width: 100%;">');
+      expect(result.markdown).toContain('<td style="border: none; width: 150px; vertical-align: top; padding: 12px 16px 12px 0;">');
+      expect(result.markdown).toContain('<img src="https://example.com/step1.jpg" width="140"');
+      expect(result.markdown).toContain('1. Build the aromatic base');
+      expect(result.markdown).toContain('style="border-top: 1px solid #e5e5e5;"');
+      expect(result.markdown).toContain('2. Fry the masala until thick');
+      // Typora rule: No block list tags in table cells
+      expect(result.markdown).not.toMatch(/<td[^>]*>[\s\S]*?<ul[\s\S]*?<\/td>/i);
+      expect(result.markdown).not.toMatch(/<td[^>]*>[\s\S]*?<li[\s\S]*?<\/td>/i);
+    });
   });
 
 });

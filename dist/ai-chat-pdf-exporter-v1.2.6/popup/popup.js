@@ -6,6 +6,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   const btnExport = document.getElementById('btn-export');
   const btnExportMd = document.getElementById('btn-export-md');
 
+  // Dynamically sync version badge with manifest
+  try {
+    const v = (chrome.runtime && chrome.runtime.getManifest && chrome.runtime.getManifest().version) || '1.2.10';
+    const vBadge = document.querySelector('.version');
+    if (vBadge) vBadge.textContent = `v${v}`;
+  } catch (e) {}
+
   // Helper to trigger file download in browser
   function downloadFile(content, filename, mimeType = 'text/markdown;charset=utf-8') {
     const blob = new Blob([content], { type: mimeType });
@@ -116,7 +123,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       try {
         let response;
         let needsInject = false;
-        const currentVersion = (chrome.runtime && chrome.runtime.getManifest && chrome.runtime.getManifest().version) || '1.2.6';
+        const currentVersion = (chrome.runtime && chrome.runtime.getManifest && chrome.runtime.getManifest().version) || '1.2.10';
         console.log(`[AI Exporter Popup] Starting export for ${platform} tab. Target version: v${currentVersion}`);
 
         try {

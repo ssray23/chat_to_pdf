@@ -4,6 +4,27 @@ document.addEventListener('DOMContentLoaded', async () => {
   const statusTitle = document.getElementById('status-title');
   const statusDesc = document.getElementById('status-desc');
   const btnExport = document.getElementById('btn-export');
+  const btnExportMd = document.getElementById('btn-export-md');
+
+  // Dynamically sync version badge with manifest
+  try {
+    const v = (chrome.runtime && chrome.runtime.getManifest && chrome.runtime.getManifest().version) || '1.2.10';
+    const vBadge = document.querySelector('.version');
+    if (vBadge) vBadge.textContent = `v${v}`;
+  } catch (e) {}
+
+  // Helper to trigger file download in browser
+  function downloadFile(content, filename, mimeType = 'text/markdown;charset=utf-8') {
+    const blob = new Blob([content], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
+  }
 
   // Helper to update status UI
   function updateStatus(type, title, desc) {
@@ -14,7 +35,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       statusIconWrapper.innerHTML = '<div class="loader"></div>';
       statusTitle.textContent = title;
       statusDesc.textContent = desc;
-      btnExport.disabled = true;
+      if (btnExportMd) btnExportMd.disabled = true;
+      if (btnExport) btnExport.disabled = true;
     } else if (type === 'detected') {
       statusCard.classList.add('detected');
       statusIconWrapper.classList.add('success');
@@ -25,7 +47,9 @@ document.addEventListener('DOMContentLoaded', async () => {
       `;
       statusTitle.textContent = title;
       statusDesc.textContent = desc;
-      btnExport.disabled = false;
+      if (btnExportMd) btnExportMd.disabled = false;
+      // PDF export is disabled for now
+      if (btnExport) btnExport.disabled = true;
     } else if (type === 'error') {
       statusCard.classList.add('error');
       statusIconWrapper.classList.add('error');
@@ -36,7 +60,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       `;
       statusTitle.textContent = title;
       statusDesc.textContent = desc;
-      btnExport.disabled = true;
+      if (btnExportMd) btnExportMd.disabled = true;
+      if (btnExport) btnExport.disabled = true;
     }
   }
 
@@ -58,8 +83,10 @@ document.addEventListener('DOMContentLoaded', async () => {
       platform = 'ChatGPT';
     } else if (url.includes('claude.ai')) {
       platform = 'Claude';
-    } else if (url.includes('gemini.google.com')) {
+    } else if (url.includes('gemini.google.com') || url.includes('share.gemini.google')) {
       platform = 'Gemini';
+    } else if (url.includes('perplexity.ai')) {
+      platform = 'Perplexity';
     } else if (url.includes('grok.com') || url.includes('x.com/i/grok')) {
       platform = 'Grok';
     } else if (url.includes('atlassian.net') || url.includes('atlassian.com')) {
@@ -69,7 +96,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (platform) {
       updateStatus('detected', `${platform} Chat Detected`, `Ready to export the conversation on this tab.`);
     } else {
-      updateStatus('error', 'Not Supported', 'Please open a conversation on Claude, ChatGPT, Gemini, Grok, or Rovo.');
+      updateStatus('error', 'Not Supported', 'Please open a conversation on Claude, ChatGPT, Gemini, Perplexity, Grok, or Rovo.');
     }
   } catch (err) {
     console.error(err);
@@ -86,51 +113,101 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
-  // Handle Export button click
-  btnExport.addEventListener('click', async () => {
-    if (!activeTab || !platform) return;
+  // Handle Markdown Export button click
+  if (btnExportMd) {
+    btnExportMd.addEventListener('click', async () => {
+      if (!activeTab || !platform) return;
 
-    updateStatus('detecting', 'Scraping Chat...', 'Extracting messages, processing images and canvases. Please keep this tab open...');
-    
-    try {
-      let response;
+      updateStatus('detecting', 'Scraping Chat...', 'Extracting conversation and formatting Markdown. Please keep this tab open...');
+      
       try {
-        // Send message to content script
-        response = await chrome.tabs.sendMessage(activeTab.id, { action: 'export_chat', platform });
-      } catch (err) {
-        // Content script might not be injected. Try injecting content script manually and retry.
-        console.warn('Content script not detected. Injecting content script...', err);
-        await chrome.scripting.executeScript({
-          target: { tabId: activeTab.id },
-          files: ['content.js']
-        });
-        // Wait a short moment and try sending message again
-        await new Promise(resolve => setTimeout(resolve, 300));
-        response = await chrome.tabs.sendMessage(activeTab.id, { action: 'export_chat', platform });
-      }
+        let response;
+        let needsInject = false;
+        const currentVersion = (chrome.runtime && chrome.runtime.getManifest && chrome.runtime.getManifest().version) || '1.2.10';
+        console.log(`[AI Exporter Popup] Starting export for ${platform} tab. Target version: v${currentVersion}`);
 
-      if (response && response.success) {
-        updateStatus('detected', 'Scrape Completed!', 'Opening print layout...');
-        
-        // Save conversation data in storage
-        await chrome.storage.local.set({
-          chatData: {
+        try {
+          const pingRes = await chrome.tabs.sendMessage(activeTab.id, { action: 'ping' });
+          console.log('[AI Exporter Popup] Content script ping response:', pingRes);
+          if (!pingRes || pingRes.version !== currentVersion) {
+            needsInject = true;
+          }
+        } catch (e) {
+          console.log('[AI Exporter Popup] Content script ping failed, injection required:', e.message);
+          needsInject = true;
+        }
+
+        if (needsInject) {
+          try {
+            console.log(`[AI Exporter Popup] Injecting latest v${currentVersion} content script into tab ${activeTab.id}...`);
+            await chrome.scripting.executeScript({
+              target: { tabId: activeTab.id },
+              files: ['content.js']
+            });
+            await new Promise(resolve => setTimeout(resolve, 350));
+            const verifyPing = await chrome.tabs.sendMessage(activeTab.id, { action: 'ping' });
+            console.log('[AI Exporter Popup] Post-injection ping verification:', verifyPing);
+            if (!verifyPing || verifyPing.version !== currentVersion) {
+              updateStatus('error', 'Tab Refresh Required', `Please reload this tab (Cmd+R) so Chrome activates the latest v${currentVersion} extension.`);
+              btnExportMd.innerHTML = '<span>Reload Tab (Cmd+R)</span>';
+              btnExportMd.disabled = false;
+              btnExportMd.onclick = () => {
+                chrome.tabs.reload(activeTab.id);
+                window.close();
+              };
+              return;
+            }
+          } catch (injectErr) {
+            console.warn('[AI Exporter Popup] Script injection attempt error:', injectErr);
+            updateStatus('error', 'Tab Refresh Required', `Please reload this tab (Cmd+R) to apply the latest v${currentVersion} update.`);
+            btnExportMd.innerHTML = '<span>Reload Tab (Cmd+R)</span>';
+            btnExportMd.disabled = false;
+            btnExportMd.onclick = () => {
+              chrome.tabs.reload(activeTab.id);
+              window.close();
+            };
+            return;
+          }
+        }
+
+        console.log('[AI Exporter Popup] Sending export_chat command to content script...');
+        response = await chrome.tabs.sendMessage(activeTab.id, { action: 'export_chat', platform });
+        console.log('[AI Exporter Popup] export_chat response received:', { success: response && response.success, count: response && response.messages ? response.messages.length : 0 });
+
+        if (response && response.success) {
+          const chatData = {
             platform: platform,
             title: activeTab.title || `${platform} Conversation`,
             url: activeTab.url,
             messages: response.messages
-          }
-        });
+          };
 
-        // Open print.html in a new tab
-        await chrome.tabs.create({ url: chrome.runtime.getURL('print.html') });
-        window.close(); // Close the popup
-      } else {
-        updateStatus('error', 'Scrape Failed', (response && response.error) || 'Failed to extract chat content.');
+          const converter = typeof MDConverter !== 'undefined' ? MDConverter : (typeof require !== 'undefined' ? require('../md-converter') : null);
+          if (!converter) {
+            throw new Error('Markdown converter module not available.');
+          }
+
+          console.log('[AI Exporter Popup] Invoking Stage 3 Markdown generator...');
+          const result = converter.convertChatToMarkdown(chatData);
+          console.log(`[AI Exporter Popup] Markdown generated: ${result.filename} (${result.markdown.length} characters)`);
+          downloadFile(result.markdown, result.filename);
+          updateStatus('detected', 'Export Complete!', `Downloaded ${response.messages.length} conversation turns as Markdown.`);
+        } else {
+          console.error('[AI Exporter Popup] Scrape failure reported by content script:', response && response.error);
+          updateStatus('error', 'Scrape Failed', (response && response.error) || 'Failed to extract chat content.');
+        }
+      } catch (err) {
+        console.error('[AI Exporter Popup] Uncaught export error:', err);
+        const isGateError = err.message && err.message.includes('Gate');
+        updateStatus('error', isGateError ? 'Quality Gate Check Failed' : 'Export Error', err.message || 'An error occurred during export.');
       }
-    } catch (err) {
-      console.error(err);
-      updateStatus('error', 'Export Error', err.message || 'An error occurred during export.');
-    }
-  });
+    });
+  }
+
+  // PDF Export option is preserved but disabled
+  if (btnExport) {
+    btnExport.addEventListener('click', () => {
+      console.log('PDF export is temporarily disabled in favor of Markdown export.');
+    });
+  }
 });

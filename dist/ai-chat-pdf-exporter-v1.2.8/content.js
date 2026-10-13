@@ -1,4 +1,4 @@
-const CONTENT_SCRIPT_VERSION = '1.2.8';
+const CONTENT_SCRIPT_VERSION = '1.2.10';
 if (typeof window !== 'undefined') {
   window.__AI_EXPORTER_VERSION__ = CONTENT_SCRIPT_VERSION;
 }
@@ -218,11 +218,15 @@ async function fetchUrlAsBase64(url) {
   try {
     const res = await fetch(cleanUrl, { credentials: 'include' });
     const blob = await res.blob();
-    return new Promise((resolve) => {
-      const reader = new FileReader();
-      reader.onloadend = () => resolve(reader.result);
-      reader.onerror = () => resolve(cleanUrl);
-      reader.readAsDataURL(blob);
+    return await new Promise((resolve) => {
+      try {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result || cleanUrl);
+        reader.onerror = () => resolve(cleanUrl);
+        reader.readAsDataURL(blob);
+      } catch (err) {
+        resolve(cleanUrl);
+      }
     });
   } catch (e) {
     console.warn('Failed to fetch URL as base64:', cleanUrl, e);
@@ -1495,12 +1499,15 @@ function extractChatGPTLiveMessages(root = document) {
   const url = typeof window !== 'undefined' && window.location ? window.location.href : '';
   const isShare = url.includes('/share/');
 
-  const isComposerOrNav = (el) => {
+  // 0. Share page extraction if URL is /share/
+  if (isShare) {
+    const shareTurns = extractChatGPTShareMessages();
+    if (shareTurns.length > 0) return shareTurns;
+  }
+
+  const isInsideComposerOrNav = (el) => {
     if (!el) return true;
-    if (el.closest && el.closest('form, footer, nav, aside, header, [data-testid*="composer" i], [data-testid*="prompt-box" i], [class*="composer" i], [class*="toolbar" i], [aria-label*="sidebar" i], [aria-label*="history" i]')) {
-      return true;
-    }
-    if (el.querySelector && el.querySelector('textarea, input[type="text"]:not([readonly]), [contenteditable="true"]')) {
+    if (el.closest && el.closest('form:not([class*="message"]), nav, aside, [data-testid="composer"], [data-testid*="sidebar" i], [aria-label*="sidebar" i]')) {
       return true;
     }
     return false;
@@ -1508,10 +1515,11 @@ function extractChatGPTLiveMessages(root = document) {
 
   // 1. Explicit author role elements
   const explicit = Array.from(root.querySelectorAll('[data-message-author-role="user"], [data-message-author-role="assistant"]'))
-    .filter(el => !isComposerOrNav(el));
+    .filter(el => !isInsideComposerOrNav(el));
   if (explicit.length > 0) {
-    Logger.stage2(`Matched ${explicit.length} explicit author-role ChatGPT turns.`);
-    return explicit.map(el => ({
+    const uniqueExplicit = getUniqueElements(explicit);
+    Logger.stage2(`Matched ${uniqueExplicit.length} explicit author-role ChatGPT turns.`);
+    return uniqueExplicit.map(el => ({
       role: (el.getAttribute('data-message-author-role') || '').toLowerCase(),
       contentEl: el
     }));
@@ -1519,8 +1527,8 @@ function extractChatGPTLiveMessages(root = document) {
 
   // 2. Conversation turn cards / containers
   const turnContainers = Array.from(root.querySelectorAll(
-    'article, [data-testid*="conversation-turn" i], div[class*="conversation-turn" i], div[class*="agent-turn" i], div[class*="user-turn" i], [data-message-id]'
-  )).filter(el => !isComposerOrNav(el));
+    'article, [data-testid^="conversation-turn-"], [data-testid*="conversation-turn" i], div[class*="conversation-turn" i], div[class*="agent-turn" i], div[class*="user-turn" i]'
+  )).filter(el => !isInsideComposerOrNav(el));
 
   if (turnContainers.length > 0) {
     const uniqueTurns = getUniqueElements(turnContainers);
@@ -1541,20 +1549,34 @@ function extractChatGPTLiveMessages(root = document) {
     if (extracted.length > 0) return extracted;
   }
 
-  // 3. Fallback: Main conversational element scanner
-  // In ChatGPT, all messages live inside <main>. Assistant messages are .markdown / .prose, and user messages are .whitespace-pre-wrap
+  // 3. Fallback: Direct Content Block Walker inside main
+  // In ChatGPT, all assistant messages contain .markdown / .prose, and user messages contain .whitespace-pre-wrap
   const mainEl = root.querySelector('main, [role="main"]') || root.body || root;
   const markdownBlocks = Array.from(mainEl.querySelectorAll('.markdown, div[class*="markdown" i], .prose'))
-    .filter(el => !isComposerOrNav(el));
+    .filter(el => !isInsideComposerOrNav(el));
 
   if (markdownBlocks.length > 0) {
     Logger.stage2(`Found ${markdownBlocks.length} markdown response blocks in ChatGPT main.`);
     const userBlocks = Array.from(mainEl.querySelectorAll('.whitespace-pre-wrap, div[class*="user" i], .font-user-message'))
-      .filter(el => !isComposerOrNav(el) && !markdownBlocks.some(mb => mb.contains(el)));
+      .filter(el => !isInsideComposerOrNav(el) && !markdownBlocks.some(mb => mb.contains(el)));
 
     const allCandidateNodes = [];
     userBlocks.forEach(u => allCandidateNodes.push({ role: 'user', contentEl: u }));
     markdownBlocks.forEach(m => allCandidateNodes.push({ role: 'assistant', contentEl: m }));
+
+    // If user prompt blocks weren't captured by class, look for preceding siblings
+    if (userBlocks.length === 0) {
+      for (const mb of markdownBlocks) {
+        let p = mb.parentElement;
+        while (p && p !== mainEl) {
+          if (p.previousElementSibling && !p.previousElementSibling.querySelector('.markdown') && p.previousElementSibling.textContent.trim().length > 0) {
+            allCandidateNodes.push({ role: 'user', contentEl: p.previousElementSibling });
+            break;
+          }
+          p = p.parentElement;
+        }
+      }
+    }
 
     allCandidateNodes.sort((a, b) => {
       if (a.contentEl && b.contentEl && a.contentEl.compareDocumentPosition) {
@@ -1565,10 +1587,10 @@ function extractChatGPTLiveMessages(root = document) {
       return 0;
     });
 
-    const uniqueNodes = getUniqueElements(allCandidateNodes.map(n => n.contentEl));
-    for (const el of uniqueNodes) {
-      const match = allCandidateNodes.find(n => n.contentEl === el);
-      if (match) extracted.push(match);
+    for (const item of allCandidateNodes) {
+      if (item.contentEl && item.contentEl.textContent.trim().length > 0) {
+        extracted.push(item);
+      }
     }
     if (extracted.length > 0) return extracted;
   }
@@ -1802,7 +1824,7 @@ function findChatScrollContainer() {
   if (sample) {
     let p = sample.parentElement;
     while (p && p !== document.body && p !== document.documentElement) {
-      if (p.closest && p.closest('nav, aside, [aria-label*="sidebar" i], [aria-label*="history" i]')) {
+      if (p.closest && p.closest('nav, aside, [aria-label*="sidebar" i], [data-testid*="sidebar" i]')) {
         p = p.parentElement;
         continue;
       }
@@ -1845,7 +1867,7 @@ function findChatScrollContainer() {
 
   // 3. Fallback across document, strictly avoiding nav and aside sidebars
   const candidates = Array.from(document.querySelectorAll('div, main, section, infinite-scroller, chat-window, mat-sidenav-content, [class*="scroller" i], [class*="chat" i]'))
-    .filter(el => !el.closest('nav, aside, [aria-label*="sidebar" i], [aria-label*="history" i]'));
+    .filter(el => !el.closest('nav, aside, [aria-label*="sidebar" i], [data-testid*="sidebar" i]'));
   for (const el of candidates) {
     const diff = el.scrollHeight - el.clientHeight;
     if (diff > maxDiff && el.clientHeight > 150) {
@@ -2424,15 +2446,31 @@ class ChatInventoryEngine {
 // Scrape chat messages by platform through the unified gated pipeline
 async function getChatMessages(platform) {
   Logger.stage1(`Starting getChatMessages for platform: ${platform}`);
-  // Stage 1: Mount & Sweep (defer scroll restoration until after inventory inspection)
-  const mountEngine = new ChatMountEngine({ skipRestore: true });
+  const inventoryEngine = new ChatInventoryEngine();
+
+  // FAST PATH (Immediate extraction):
+  // If the conversation turns are already present and visible in the DOM (e.g. ChatGPT, Claude, active tab),
+  // capture them directly without triggering scroll sweeps that can unmount or desync virtualized lists.
+  try {
+    const immediateRes = await inventoryEngine.inspect(platform);
+    if (immediateRes && immediateRes.turns && immediateRes.turns.length > 0) {
+      Logger.stage1(`Immediate DOM extraction succeeded: captured ${immediateRes.turns.length} turns without scroll sweep.`);
+      return immediateRes.turns.map(t => ({
+        role: t.role,
+        html: t.html,
+        components: t.components
+      }));
+    }
+  } catch (e) {
+    Logger.stage1(`Immediate inspection did not find complete turns (${e.message}). Proceeding to dynamic mount sweep...`);
+  }
+
+  // SWEEP PATH (Lazy/virtualized chats like Gemini):
+  const mountEngine = new ChatMountEngine({ skipRestore: false });
   const mountResult = await mountEngine.sweep();
 
   try {
-    // Stage 2: Inventory & Inspection
-    const inventoryEngine = new ChatInventoryEngine();
     const inventoryResult = await inventoryEngine.inspect(platform);
-
     Logger.stage3(`Inventory verified. Preparing ${inventoryResult.turns.length} turns for Markdown converter.`);
     return inventoryResult.turns.map(t => ({
       role: t.role,

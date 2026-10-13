@@ -323,12 +323,38 @@ body {
     margin: 0.3rem 0;
 }
 
-#write blockquote p:first-child {
-    margin-top: 0;
+#write blockquote > :first-child,
+#write blockquote p:first-child,
+#write blockquote h1:first-child,
+#write blockquote h2:first-child,
+#write blockquote h3:first-child,
+#write blockquote h4:first-child,
+#write blockquote h5:first-child,
+#write blockquote h6:first-child {
+    margin-top: 0 !important;
+    padding-top: 0 !important;
 }
 
-#write blockquote p:last-child {
-    margin-bottom: 0;
+#write blockquote > :last-child,
+#write blockquote p:last-child,
+#write blockquote h1:last-child,
+#write blockquote h2:last-child,
+#write blockquote h3:last-child,
+#write blockquote h4:last-child,
+#write blockquote h5:last-child,
+#write blockquote h6:last-child {
+    margin-bottom: 0 !important;
+    padding-bottom: 0 !important;
+}
+
+#write blockquote h1,
+#write blockquote h2,
+#write blockquote h3,
+#write blockquote h4,
+#write blockquote h5,
+#write blockquote h6 {
+    color: var(--text-primary);
+    line-height: 1.35;
 }
 
 /* Horizontal rule */

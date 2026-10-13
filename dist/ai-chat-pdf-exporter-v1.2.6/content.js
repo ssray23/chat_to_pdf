@@ -1,4 +1,4 @@
-const CONTENT_SCRIPT_VERSION = '1.2.6';
+const CONTENT_SCRIPT_VERSION = '1.2.10';
 if (typeof window !== 'undefined') {
   window.__AI_EXPORTER_VERSION__ = CONTENT_SCRIPT_VERSION;
 }
@@ -218,11 +218,15 @@ async function fetchUrlAsBase64(url) {
   try {
     const res = await fetch(cleanUrl, { credentials: 'include' });
     const blob = await res.blob();
-    return new Promise((resolve) => {
-      const reader = new FileReader();
-      reader.onloadend = () => resolve(reader.result);
-      reader.onerror = () => resolve(cleanUrl);
-      reader.readAsDataURL(blob);
+    return await new Promise((resolve) => {
+      try {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result || cleanUrl);
+        reader.onerror = () => resolve(cleanUrl);
+        reader.readAsDataURL(blob);
+      } catch (err) {
+        resolve(cleanUrl);
+      }
     });
   } catch (e) {
     console.warn('Failed to fetch URL as base64:', cleanUrl, e);
@@ -1042,10 +1046,20 @@ function normalizeGeminiTurn(clone, role) {
 function getUniqueElements(elements) {
   const arr = Array.from(elements);
   return arr.filter(el => {
+    // If el contains multiple other candidate items in arr, el is a container list; discard el in favor of individual items
+    const childCandidatesCount = arr.filter(other => other !== el && el.contains && el.contains(other)).length;
+    if (childCandidatesCount > 1) {
+      return false;
+    }
+    // If an ancestor of el is also in arr:
     let parent = el.parentElement;
     while (parent) {
       if (arr.includes(parent)) {
-        return false;
+        const parentChildCount = arr.filter(other => other !== parent && parent.contains && parent.contains(other)).length;
+        // If the ancestor contains only this single candidate (redundant 1:1 wrapper), discard this child in favor of the ancestor
+        if (parentChildCount === 1) {
+          return false;
+        }
       }
       parent = parent.parentElement;
     }
@@ -1479,6 +1493,116 @@ function extractChatGPTShareMessages() {
 
 }
 
+// Extract ChatGPT live web application content (robust multi-variant discovery)
+function extractChatGPTLiveMessages(root = document) {
+  const extracted = [];
+  const url = typeof window !== 'undefined' && window.location ? window.location.href : '';
+  const isShare = url.includes('/share/');
+
+  // 0. Share page extraction if URL is /share/
+  if (isShare) {
+    const shareTurns = extractChatGPTShareMessages();
+    if (shareTurns.length > 0) return shareTurns;
+  }
+
+  const isInsideComposerOrNav = (el) => {
+    if (!el) return true;
+    if (el.closest && el.closest('form:not([class*="message"]), nav, aside, [data-testid="composer"], [data-testid*="sidebar" i], [aria-label*="sidebar" i]')) {
+      return true;
+    }
+    return false;
+  };
+
+  // 1. Explicit author role elements
+  const explicit = Array.from(root.querySelectorAll('[data-message-author-role="user"], [data-message-author-role="assistant"]'))
+    .filter(el => !isInsideComposerOrNav(el));
+  if (explicit.length > 0) {
+    const uniqueExplicit = getUniqueElements(explicit);
+    Logger.stage2(`Matched ${uniqueExplicit.length} explicit author-role ChatGPT turns.`);
+    return uniqueExplicit.map(el => ({
+      role: (el.getAttribute('data-message-author-role') || '').toLowerCase(),
+      contentEl: el
+    }));
+  }
+
+  // 2. Conversation turn cards / containers
+  const turnContainers = Array.from(root.querySelectorAll(
+    'article, [data-testid^="conversation-turn-"], [data-testid*="conversation-turn" i], div[class*="conversation-turn" i], div[class*="agent-turn" i], div[class*="user-turn" i]'
+  )).filter(el => !isInsideComposerOrNav(el));
+
+  if (turnContainers.length > 0) {
+    const uniqueTurns = getUniqueElements(turnContainers);
+    Logger.stage2(`Matched ${uniqueTurns.length} ChatGPT turn containers.`);
+    for (let i = 0; i < uniqueTurns.length; i++) {
+      const art = uniqueTurns[i];
+      const userSub = art.querySelector('[data-message-author-role="user"], .font-user-message, div[class*="user-message" i], div[class*="user_message" i], .whitespace-pre-wrap');
+      const asstSub = art.querySelector('[data-message-author-role="assistant"], .markdown, div[class*="markdown" i], [class*="agent-turn" i], .prose');
+      if (userSub && asstSub && userSub !== asstSub && !asstSub.contains(userSub) && !userSub.contains(asstSub)) {
+        extracted.push({ role: 'user', contentEl: userSub });
+        extracted.push({ role: 'assistant', contentEl: asstSub });
+      } else {
+        const role = classifyTurnRole(art, i, uniqueTurns.length);
+        const contentEl = (role === 'assistant' ? (asstSub || art) : (userSub || art));
+        extracted.push({ role, contentEl });
+      }
+    }
+    if (extracted.length > 0) return extracted;
+  }
+
+  // 3. Fallback: Direct Content Block Walker inside main
+  // In ChatGPT, all assistant messages contain .markdown / .prose, and user messages contain .whitespace-pre-wrap
+  const mainEl = root.querySelector('main, [role="main"]') || root.body || root;
+  const markdownBlocks = Array.from(mainEl.querySelectorAll('.markdown, div[class*="markdown" i], .prose'))
+    .filter(el => !isInsideComposerOrNav(el));
+
+  if (markdownBlocks.length > 0) {
+    Logger.stage2(`Found ${markdownBlocks.length} markdown response blocks in ChatGPT main.`);
+    const userBlocks = Array.from(mainEl.querySelectorAll('.whitespace-pre-wrap, div[class*="user" i], .font-user-message'))
+      .filter(el => !isInsideComposerOrNav(el) && !markdownBlocks.some(mb => mb.contains(el)));
+
+    const allCandidateNodes = [];
+    userBlocks.forEach(u => allCandidateNodes.push({ role: 'user', contentEl: u }));
+    markdownBlocks.forEach(m => allCandidateNodes.push({ role: 'assistant', contentEl: m }));
+
+    // If user prompt blocks weren't captured by class, look for preceding siblings
+    if (userBlocks.length === 0) {
+      for (const mb of markdownBlocks) {
+        let p = mb.parentElement;
+        while (p && p !== mainEl) {
+          if (p.previousElementSibling && !p.previousElementSibling.querySelector('.markdown') && p.previousElementSibling.textContent.trim().length > 0) {
+            allCandidateNodes.push({ role: 'user', contentEl: p.previousElementSibling });
+            break;
+          }
+          p = p.parentElement;
+        }
+      }
+    }
+
+    allCandidateNodes.sort((a, b) => {
+      if (a.contentEl && b.contentEl && a.contentEl.compareDocumentPosition) {
+        const pos = a.contentEl.compareDocumentPosition(b.contentEl);
+        if (pos & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
+        if (pos & Node.DOCUMENT_POSITION_PRECEDING) return 1;
+      }
+      return 0;
+    });
+
+    for (const item of allCandidateNodes) {
+      if (item.contentEl && item.contentEl.textContent.trim().length > 0) {
+        extracted.push(item);
+      }
+    }
+    if (extracted.length > 0) return extracted;
+  }
+
+  // 4. Share page fallback if URL is /share/
+  if (isShare) {
+    return extractChatGPTShareMessages();
+  }
+
+  return extracted;
+}
+
 // Extract Gemini live web application content (pairwise .conversation-container cards and elements)
 function extractGeminiLiveMessages(root = document) {
   const extracted = [];
@@ -1668,8 +1792,7 @@ function extractAdaptiveTurns(root = document.body) {
     '.prose',
     'div[class*="message" i]',
     'div[class*="chat-turn" i]',
-    'div[class*="bubble" i]',
-    'div[class*="row" i]'
+    'div[class*="bubble" i]'
   ];
 
   const rawCandidates = Array.from(root.querySelectorAll(candidateSelectors.join(', ')))
@@ -1694,13 +1817,17 @@ function extractAdaptiveTurns(root = document.body) {
 
 // Helper to find the actual scrollable conversation container
 function findChatScrollContainer() {
-  // 1. Walk up from any rendered message or document
+  // 1. Walk up from any rendered message or document, strictly avoiding sidebars
   const sample = document.querySelector(
-    '.ak-renderer-document, [data-testid*="message" i], [class*="message" i], [class*="bubble" i], [data-testid*="user-message" i], user-query, message-content, model-response, .conversation-container, div[class*="conversation-container" i]'
+    'article, [data-testid*="conversation-turn" i], [data-message-author-role], .markdown, div[class*="markdown" i], [data-message-id], .ak-renderer-document, [data-testid*="message" i], [class*="message" i], [class*="bubble" i], [data-testid*="user-message" i], user-query, message-content, model-response, .conversation-container, div[class*="conversation-container" i]'
   );
   if (sample) {
     let p = sample.parentElement;
     while (p && p !== document.body && p !== document.documentElement) {
+      if (p.closest && p.closest('nav, aside, [aria-label*="sidebar" i], [data-testid*="sidebar" i]')) {
+        p = p.parentElement;
+        continue;
+      }
       const style = window.getComputedStyle(p);
       const ov = style.overflowY || style.overflow;
       if (/(auto|scroll|overlay)/.test(ov) && p.scrollHeight > p.clientHeight + 40) {
@@ -1710,8 +1837,8 @@ function findChatScrollContainer() {
     }
   }
 
-  // Direct check for known chat scroller tags/classes
-  const knownScroller = document.querySelector('infinite-scroller, [class*="infinite-scroller" i], [class*="chat-history" i], chat-window, [class*="chat-scroll" i], [class*="react-scroll-to-bottom" i]');
+  // Direct check for known chat scroller tags/classes inside main
+  const knownScroller = document.querySelector('main infinite-scroller, main [class*="infinite-scroller" i], main [class*="chat-history" i], main chat-window, main [class*="chat-scroll" i], main [class*="react-scroll-to-bottom" i], infinite-scroller, [class*="react-scroll-to-bottom" i]');
   if (knownScroller && knownScroller.scrollHeight > knownScroller.clientHeight + 40) {
     const style = window.getComputedStyle(knownScroller);
     const ov = style.overflowY || style.overflow;
@@ -1720,10 +1847,27 @@ function findChatScrollContainer() {
     }
   }
 
-  // 2. Scan all block elements with scrollable overflow
-  const candidates = Array.from(document.querySelectorAll('div, main, section, infinite-scroller, chat-window, mat-sidenav-content, [class*="scroller" i], [class*="chat" i]'));
+  // 2. Scan all block elements with scrollable overflow inside main FIRST
+  const mainEl = document.querySelector('main, [role="main"]');
+  const mainCandidates = mainEl ? Array.from(mainEl.querySelectorAll('div, section, [class*="scroller" i]')) : [];
   let best = null;
   let maxDiff = 0;
+  for (const el of mainCandidates) {
+    const diff = el.scrollHeight - el.clientHeight;
+    if (diff > maxDiff && el.clientHeight > 150) {
+      const style = window.getComputedStyle(el);
+      const ov = style.overflowY || style.overflow;
+      if (/(auto|scroll|overlay)/.test(ov)) {
+        best = el;
+        maxDiff = diff;
+      }
+    }
+  }
+  if (best) return best;
+
+  // 3. Fallback across document, strictly avoiding nav and aside sidebars
+  const candidates = Array.from(document.querySelectorAll('div, main, section, infinite-scroller, chat-window, mat-sidenav-content, [class*="scroller" i], [class*="chat" i]'))
+    .filter(el => !el.closest('nav, aside, [aria-label*="sidebar" i], [data-testid*="sidebar" i]'));
   for (const el of candidates) {
     const diff = el.scrollHeight - el.clientHeight;
     if (diff > maxDiff && el.clientHeight > 150) {
@@ -1926,69 +2070,8 @@ class ChatInventoryEngine {
     let candidateTurns = [];
 
     // 1. Platform-specific island discovery
-    if (platform === 'Gemini' || url.includes('gemini.google') || document.querySelectorAll('share-turn-viewer').length > 0 || document.querySelectorAll('.conversation-container, div[class*="conversation-container" i]').length > 0) {
-      const isShare = url.includes('/share/') || url.includes('share.gemini.google') || document.querySelectorAll('share-turn-viewer').length > 0;
-      if (isShare) {
-        Logger.stage2('Using Gemini share page viewer extractor...');
-        const shareTurns = extractGeminiShareMessages(document);
-        const hasAsst = shareTurns.some(t => t.role === 'assistant');
-        if (shareTurns.length > 0 && hasAsst) {
-          candidateTurns = shareTurns;
-          Logger.stage2(`Extracted ${shareTurns.length} pairwise turns from share-turn-viewer.`);
-        }
-      }
-      if (candidateTurns.length === 0) {
-        // Live Gemini conversation-container turn cards
-        const liveTurns = extractGeminiLiveMessages(document);
-        const hasAsst = liveTurns.some(t => t.role === 'assistant');
-        if (liveTurns.length > 0 && hasAsst) {
-          candidateTurns = liveTurns;
-          Logger.stage2(`Extracted ${liveTurns.length} pairwise turns from live Gemini conversation-container cards.`);
-        }
-      }
-      if (candidateTurns.length === 0) {
-        Logger.stage2('Querying live Gemini elements from light and custom element DOM...');
-        const liveElements = Array.from(document.querySelectorAll(
-          'user-query, response-container, [class*="presented-response" i], [class*="response-container" i], ' +
-          '[class*="single-draft-response" i], .single-draft-response-container, ' +
-          'structured-content-container, message-content, model-response, [class*="model-response-text" i], ' +
-          '[class*="query-text" i], .query-text-container, .model-response-container'
-        ));
-        const unique = getUniqueElements(liveElements);
-        candidateTurns = unique.map((el, i) => ({
-          role: classifyTurnRole(el, i, unique.length),
-          contentEl: el
-        }));
-        Logger.stage2(`Matched ${unique.length} unique Gemini live elements.`);
-      }
-    } else if (platform === 'ChatGPT' || url.includes('chatgpt.com') || url.includes('chat.openai.com')) {
-      const isShare = url.includes('/share/');
-      const explicit = Array.from(document.querySelectorAll('[data-message-author-role="user"], [data-message-author-role="assistant"]'));
-      if (explicit.length > 0) {
-        Logger.stage2(`Matched ${explicit.length} explicit author-role ChatGPT turns.`);
-        candidateTurns = explicit.map(el => ({
-          role: (el.getAttribute('data-message-author-role') || '').toLowerCase(),
-          contentEl: el
-        }));
-      } else {
-        const articles = Array.from(document.querySelectorAll('article, [data-testid*="conversation-turn"]'));
-        if (articles.length > 0) {
-          Logger.stage2(`Matched ${articles.length} ChatGPT article turns.`);
-          for (const art of articles) {
-            const userSub = art.querySelector('[data-message-author-role="user"], .font-user-message, div[class*="user-message" i], div[class*="user_message" i]');
-            const asstSub = art.querySelector('[data-message-author-role="assistant"], .markdown, div[class*="markdown" i], [class*="agent-turn" i]');
-            if (userSub && asstSub && userSub !== asstSub) {
-              candidateTurns.push({ role: 'user', contentEl: userSub });
-              candidateTurns.push({ role: 'assistant', contentEl: asstSub });
-            } else {
-              candidateTurns.push({ role: classifyTurnRole(art, candidateTurns.length), contentEl: art });
-            }
-          }
-        } else if (isShare) {
-          Logger.stage2('Extracting ChatGPT share page turns...');
-          candidateTurns = extractChatGPTShareMessages();
-        }
-      }
+    if (platform === 'ChatGPT' || url.includes('chatgpt.com') || url.includes('chat.openai.com')) {
+      candidateTurns = extractChatGPTLiveMessages(document);
     } else if (platform === 'Claude' || url.includes('claude.ai')) {
       const claudeEls = Array.from(document.querySelectorAll(
         '.font-user-message, .font-claude-message, [data-testid="user-message"], [data-testid="assistant-message"], ' +
@@ -2051,6 +2134,48 @@ class ChatInventoryEngine {
         role: classifyTurnRole(el, i, unique.length),
         contentEl: el
       }));
+    } else if (platform === 'Gemini' || url.includes('gemini.google') || document.querySelectorAll('share-turn-viewer').length > 0 || document.querySelectorAll('.conversation-container, div[class*="conversation-container" i]').length > 0) {
+      const isShare = url.includes('/share/') || url.includes('share.gemini.google') || document.querySelectorAll('share-turn-viewer').length > 0;
+      if (isShare) {
+        Logger.stage2('Using Gemini share page viewer extractor...');
+        const shareTurns = extractGeminiShareMessages(document);
+        const hasAsst = shareTurns.some(t => t.role === 'assistant');
+        if (shareTurns.length > 0 && hasAsst) {
+          candidateTurns = shareTurns;
+          Logger.stage2(`Extracted ${shareTurns.length} pairwise turns from share-turn-viewer.`);
+        }
+      }
+      if (candidateTurns.length === 0) {
+        // Live Gemini conversation-container turn cards
+        const liveTurns = extractGeminiLiveMessages(document);
+        const hasAsst = liveTurns.some(t => t.role === 'assistant');
+        if (liveTurns.length > 0 && hasAsst) {
+          candidateTurns = liveTurns;
+          Logger.stage2(`Extracted ${liveTurns.length} pairwise turns from live Gemini conversation-container cards.`);
+        }
+      }
+      if (candidateTurns.length === 0) {
+        Logger.stage2('Querying live Gemini elements from light and custom element DOM...');
+        const liveElements = Array.from(document.querySelectorAll(
+          'user-query, response-container, [class*="presented-response" i], [class*="response-container" i], ' +
+          '[class*="single-draft-response" i], .single-draft-response-container, ' +
+          'structured-content-container, message-content, model-response, [class*="model-response-text" i], ' +
+          '[class*="query-text" i], .query-text-container, .model-response-container'
+        ));
+        const unique = getUniqueElements(liveElements);
+        candidateTurns = unique.map((el, i) => ({
+          role: classifyTurnRole(el, i, unique.length),
+          contentEl: el
+        }));
+        Logger.stage2(`Matched ${unique.length} unique Gemini live elements.`);
+      }
+    }
+
+    // Dynamic mount retry if primary discovery yielded 0 turns (e.g. freshly reloaded tab)
+    if (candidateTurns.length === 0 && (platform === 'ChatGPT' || url.includes('chatgpt.com') || url.includes('chat.openai.com'))) {
+      Logger.stage2('Primary discovery yielded 0 turns on ChatGPT. Waiting 800ms for dynamic messages mount...');
+      await new Promise(r => setTimeout(r, 800));
+      candidateTurns = extractChatGPTLiveMessages(document);
     }
 
     // Universal Adaptive Turn Discovery fallback if primary query yielded nothing
@@ -2321,15 +2446,31 @@ class ChatInventoryEngine {
 // Scrape chat messages by platform through the unified gated pipeline
 async function getChatMessages(platform) {
   Logger.stage1(`Starting getChatMessages for platform: ${platform}`);
-  // Stage 1: Mount & Sweep (defer scroll restoration until after inventory inspection)
-  const mountEngine = new ChatMountEngine({ skipRestore: true });
+  const inventoryEngine = new ChatInventoryEngine();
+
+  // FAST PATH (Immediate extraction):
+  // If the conversation turns are already present and visible in the DOM (e.g. ChatGPT, Claude, active tab),
+  // capture them directly without triggering scroll sweeps that can unmount or desync virtualized lists.
+  try {
+    const immediateRes = await inventoryEngine.inspect(platform);
+    if (immediateRes && immediateRes.turns && immediateRes.turns.length > 0) {
+      Logger.stage1(`Immediate DOM extraction succeeded: captured ${immediateRes.turns.length} turns without scroll sweep.`);
+      return immediateRes.turns.map(t => ({
+        role: t.role,
+        html: t.html,
+        components: t.components
+      }));
+    }
+  } catch (e) {
+    Logger.stage1(`Immediate inspection did not find complete turns (${e.message}). Proceeding to dynamic mount sweep...`);
+  }
+
+  // SWEEP PATH (Lazy/virtualized chats like Gemini):
+  const mountEngine = new ChatMountEngine({ skipRestore: false });
   const mountResult = await mountEngine.sweep();
 
   try {
-    // Stage 2: Inventory & Inspection
-    const inventoryEngine = new ChatInventoryEngine();
     const inventoryResult = await inventoryEngine.inspect(platform);
-
     Logger.stage3(`Inventory verified. Preparing ${inventoryResult.turns.length} turns for Markdown converter.`);
     return inventoryResult.turns.map(t => ({
       role: t.role,

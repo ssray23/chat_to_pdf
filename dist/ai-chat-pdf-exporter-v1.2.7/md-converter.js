@@ -1017,10 +1017,13 @@
     // 8. Clean redundant screen-reader artifact lines if any sneaked through
     out = out.replace(/^[> ]*#{1,6}\s*(?:You said|ChatGPT said|Claude said):?\s*$/gmi, '');
 
-    // 9. Transform sequential step images followed by numbered instructions into clean 2-column card tables
+    // 9. Clean up multiple newlines before table formatting
+    out = out.replace(/\n{3,}/g, '\n\n');
+
+    // 10. Transform sequential step images followed by numbered instructions into clean 2-column card tables
     out = formatStepImagesIntoTables(out);
 
-    // 10. Clean up leading/trailing dashes and multiple newlines
+    // 11. Final trim and newline clean
     out = out
       .replace(/\n{3,}/g, '\n\n')
       .trim();
@@ -1034,25 +1037,17 @@
   function formatStepImagesIntoTables(text) {
     if (!text || !text.includes('![')) return text;
 
-    // Pattern matches an image immediately followed by a numbered instruction (e.g. 1. Build the aromatic base)
-    // and subsequent instruction paragraphs up until the next image, heading, or list.
-    const stepRegex = /!\[([^\]]*)\]\(([^)]+)\)\n\n(\d+[\.\)][ \t]*[^\n]+)((?:\n\n(?!\!\[|\#{1,6}|\d+[\.\)]|[ \t]*[-*+]|\<\/?table)[^\n]+)*)/g;
+    // Pattern matches an image immediately followed by a numbered instruction (e.g. 1. Build... or **1. Build...**)
+    // and subsequent instruction paragraphs up until the next image, major heading, or table.
+    const stepRegex = /!\[([^\]]*)\]\(([^)]+)\)\n+((?:\*{1,2}|#{1,4}\s*)?\d+[\.\)][ \t]*[^\n]+)((?:\n(?!\n\!\[|\n#{1,3}\s+|\n<table)[^\n]+)*)/g;
 
     let matchCount = 0;
     const tagged = text.replace(stepRegex, (match, alt, src, title, body) => {
       matchCount++;
       alt = (alt || 'Step image').trim();
       src = src.trim();
-      title = title.trim();
-      const cleanBody = (body || '').trim();
-      let bodyHtml = '';
-      if (cleanBody) {
-        bodyHtml = cleanBody.split('\n\n')
-          .map(p => p.trim())
-          .filter(Boolean)
-          .map(p => `<p style="margin: 6px 0 0 0; line-height: 1.5;">${p}</p>`)
-          .join('\n      ');
-      }
+      const cleanTitle = title.replace(/^[\s#*]+|[\s*]+$/g, '').trim();
+      const cleanBody = (body || '').trim().replace(/\s\s+\n/g, '<br>').replace(/\n+/g, '<br>');
 
       return `<!--STEP_CARD_START-->
   <tr>
@@ -1060,8 +1055,8 @@
       <img src="${src}" width="140" style="border-radius: 8px; display: block;" alt="${alt}" />
     </td>
     <td style="border: none; vertical-align: top; padding: 12px 0;">
-      <strong style="font-size: 1.05rem;">${title}</strong>
-      ${bodyHtml}
+      <strong style="font-size: 1.05rem;">${cleanTitle}</strong>
+      ${cleanBody ? `<div style="margin-top: 6px; line-height: 1.5;">${cleanBody}</div>` : ''}
     </td>
   </tr>
 <!--STEP_CARD_END-->`;
