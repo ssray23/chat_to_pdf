@@ -1,7 +1,31 @@
-const CONTENT_SCRIPT_VERSION = '1.2.2';
+const CONTENT_SCRIPT_VERSION = '1.2.3';
 if (typeof window !== 'undefined') {
   window.__AI_EXPORTER_VERSION__ = CONTENT_SCRIPT_VERSION;
 }
+
+// Comprehensive Pipeline Diagnostic Logger
+const Logger = {
+  prefix: '[AI Exporter Pipeline]',
+  stage1(msg, ...args) {
+    console.log(`%c${this.prefix} [Stage 1: MountSweep] ${msg}`, 'color: #0284c7; font-weight: bold;', ...args);
+  },
+  stage2(msg, ...args) {
+    console.log(`%c${this.prefix} [Stage 2: Inventory] ${msg}`, 'color: #7c3aed; font-weight: bold;', ...args);
+  },
+  recovery(msg, ...args) {
+    console.log(`%c${this.prefix} [Stage 2: Auto-Recovery] ${msg}`, 'color: #d97706; font-weight: bold;', ...args);
+  },
+  gate(gateName, passed, details) {
+    const color = passed ? '#16a34a' : '#dc2626';
+    console.log(`%c${this.prefix} [${gateName}] ${passed ? 'PASSED' : 'FAILED'}:`, `color: ${color}; font-weight: bold;`, details);
+  },
+  stage3(msg, ...args) {
+    console.log(`%c${this.prefix} [Stage 3: Markdown Handover] ${msg}`, 'color: #059669; font-weight: bold;', ...args);
+  },
+  error(msg, ...args) {
+    console.error(`%c${this.prefix} [ERROR] ${msg}`, 'color: #dc2626; font-weight: bold;', ...args);
+  }
+};
 
 // Listen for messages from the popup
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -12,11 +36,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'export_chat') {
     (async () => {
       try {
+        Logger.stage1(`Initiating 3-stage gated chat export for platform: ${message.platform}`);
         const messages = await getChatMessages(message.platform);
         const mathStylesheets = getPageStylesheets();
+        Logger.stage2(`Successfully extracted and verified ${messages.length} conversation turns.`);
         sendResponse({ success: true, messages, mathStylesheets, version: CONTENT_SCRIPT_VERSION });
       } catch (err) {
-        console.error('AI Chat PDF Exporter Scrape Error:', err);
+        Logger.error('Scrape execution halted:', err);
         sendResponse({ success: false, error: err.message || 'Scrape failed' });
       }
     })();
@@ -1078,10 +1104,14 @@ function deepCloneWithShadowsAndSvgs(originalNode) {
   return clone;
 }
 
-// Check if an element or its descendants have a distinct user bubble background color (blue, gray, dark pill, etc.)
+// Check if an element has a distinct authentic user bubble background color (blue, purple pill)
 function hasUserBubbleStyle(el) {
   if (!el) return false;
   try {
+    // Elements with rich assistant content are never user bubbles
+    if (el.querySelector && el.querySelector('pre, table, .markdown, .prose, .ak-renderer-document, code.hljs')) {
+      return false;
+    }
     const cs = window.getComputedStyle(el);
     const bg = cs.backgroundColor || '';
     if (bg && bg !== 'transparent' && bg !== 'rgba(0, 0, 0, 0)') {
@@ -1091,13 +1121,11 @@ function hasUserBubbleStyle(el) {
         const g = parseInt(match[2], 10);
         const b = parseInt(match[3], 10);
         // Blue bubble: primary Atlaskit #0c66e4 is rgb(12, 102, 228), #0052cc is rgb(0, 82, 204), #0065ff is rgb(0, 101, 255)
-        if (b > 130 && b > r + 15 && b > g + 15) return true;
-        // Dark gray/charcoal bubble in light mode or distinct pill in dark mode
-        if (r === g && g === b && (r < 60 || (r > 220 && r < 250))) return true;
+        if (b > 130 && b > r + 20 && b > g + 20) return true;
+        // Purple bubble: e.g. #7c3aed
+        if (r > 100 && b > 180 && b > g + 30 && r > g + 30) return true;
       }
     }
-    const radius = parseFloat(cs.borderRadius) || 0;
-    if (radius >= 10 && cs.display !== 'inline' && bg && bg !== 'transparent' && bg !== 'rgba(0, 0, 0, 0)') return true;
   } catch (e) {}
   return false;
 }
@@ -1114,7 +1142,11 @@ function isUserTurn(el) {
   const tagName = el.tagName ? el.tagName.toLowerCase() : '';
   if (tagName === 'user-query') return true;
   if (tagName === 'model-response' || tagName === 'message-content' || tagName === 'response-container' || tagName === 'structured-content-container') return false;
-  if (el.className && typeof el.className === 'string' && (el.className.includes('presented-response') || el.className.includes('response-container'))) return false;
+  if (el.className && typeof el.className === 'string' && (el.className.includes('presented-response') || el.className.includes('response-container') || el.className.includes('model-response'))) return false;
+
+  // Rich assistant structures are never user turns unless explicitly tagged author="user"
+  if (el.classList && el.classList.contains('ak-renderer-document')) return false;
+  if (el.querySelector && el.querySelector('.ak-renderer-document, table, pre, code.hljs')) return false;
 
   const hasAsstChild = el.querySelector && el.querySelector(
     '[data-message-author-role="assistant"], model-response, message-content, response-container, [class*="presented-response" i], [class*="response-container" i], [class*="model-response" i], .markdown, div[class*="markdown" i]'
@@ -1127,8 +1159,6 @@ function isUserTurn(el) {
   if (hasUserChild) return true;
   if (hasAsstChild) return false;
   if (el.closest && el.closest('[data-message-author-role="user"]')) return true;
-  if (el.classList && el.classList.contains('ak-renderer-document')) return false;
-  if (el.querySelector && el.querySelector('.ak-renderer-document')) return false;
 
   // 2. Explicit User testid or class markers (excluding parent message containers that also match 'assistant' or 'agent')
   const testId = (el.getAttribute('data-testid') || '').toLowerCase();
@@ -1150,27 +1180,11 @@ function isUserTurn(el) {
     }
   }
 
-  // 3. User bubble styling (Blue bubble / dark pill on el, ancestor, or any child)
+  // 3. User bubble styling (Blue bubble on el or direct parent)
   if (hasUserBubbleStyle(el)) return true;
   if (el.parentElement && hasUserBubbleStyle(el.parentElement)) return true;
   if (el.closest && (el.closest('[style*="rgb(12, 102, 228)"]') || el.closest('[style*="rgb(0, 82, 204)"]') || el.closest('[style*="rgb(0, 101, 255)"]'))) {
     return true;
-  }
-  try {
-    const cs = window.getComputedStyle(el);
-    const col = cs.color || '';
-    if (/rgba?\(25[0-5],\s*25[0-5],\s*25[0-5]/.test(col) && el.textContent.trim().length > 0) {
-      if (hasUserBubbleStyle(el)) {
-        return true;
-      }
-    }
-  } catch (e) {}
-
-  if (el.querySelectorAll) {
-    const bubbles = el.querySelectorAll('div, section, p, span');
-    for (let i = 0; i < Math.min(bubbles.length, 15); i++) {
-      if (hasUserBubbleStyle(bubbles[i])) return true;
-    }
   }
 
   // 4. Layout alignment (right-aligned user bubbles)
@@ -1213,10 +1227,18 @@ function classifyTurnRole(el, index = 0, totalTurns = 1) {
     return 'assistant';
   }
 
-  // 4. Prioritize user turn detection
+  // 4. Prioritize explicit user turn markers
   if (isUserTurn(el)) return 'user';
 
-  if (el.classList.contains('ak-renderer-document') || (el.querySelector && el.querySelector('.ak-renderer-document'))) {
+  // 5. Rich Assistant Content Fingerprint (Tables, Code Blocks, Prose, Math, Smart Links)
+  const hasCodeBlock = el.querySelector && el.querySelector('pre, code.hljs, [class*="code-block" i]') !== null;
+  const hasTable = el.querySelector && el.querySelector('table') !== null;
+  const hasMath = el.querySelector && el.querySelector('.katex, .MathJax, [data-math]') !== null;
+  const hasSources = el.querySelector && el.querySelector('[data-testid*="source" i], [class*="source" i], [class*="citation" i]') !== null;
+  const hasMarkdown = el.querySelector && el.querySelector('.markdown, [class*="markdown" i], .prose:not([class*="query" i])') !== null;
+  const hasAkRenderer = (el.classList && el.classList.contains('ak-renderer-document')) || (el.querySelector && el.querySelector('.ak-renderer-document') !== null);
+
+  if (hasAkRenderer || hasMarkdown || hasCodeBlock || hasTable || hasMath || hasSources) {
     return 'assistant';
   }
 
@@ -1226,19 +1248,7 @@ function classifyTurnRole(el, index = 0, totalTurns = 1) {
     return 'user';
   }
 
-  // 4. Rich Markdown / Assistant Content Fingerprint
-  const hasCodeBlock = el.querySelector && el.querySelector('pre, code.hljs, [class*="code-block" i]') !== null;
-  const hasTable = el.querySelector && el.querySelector('table') !== null;
-  const hasMath = el.querySelector && el.querySelector('.katex, .MathJax, [data-math]') !== null;
-  const hasHeadings = el.querySelector && el.querySelector('h1, h2, h3, h4, h5, h6') !== null;
-  const hasSources = el.querySelector && el.querySelector('[data-testid*="source" i], [class*="source" i], [class*="citation" i]') !== null;
-  const hasMarkdown = el.querySelector && el.querySelector('.markdown, .prose, [class*="markdown" i], [class*="prose" i]') !== null;
-
-  if (hasMarkdown || hasCodeBlock || hasTable || hasMath || hasHeadings || hasSources) {
-    return 'assistant';
-  }
-
-  // 5. Tie-breaker via alternating rhythm parity
+  // 6. Tie-breaker via alternating rhythm parity
   return index % 2 === 0 ? 'user' : 'assistant';
 }
 
@@ -1450,6 +1460,8 @@ function extractChatGPTShareMessages() {
 function extractGeminiShareMessages(root = document) {
   const extracted = [];
   const viewers = root.querySelectorAll('share-turn-viewer');
+  Logger.stage2(`Inspecting ${viewers.length} <share-turn-viewer> elements...`);
+
   if (viewers.length > 0) {
     for (let i = 0; i < viewers.length; i++) {
       const v = viewers[i];
@@ -1461,7 +1473,8 @@ function extractGeminiShareMessages(root = document) {
                    v.querySelector('structured-content-container') ||
                    v.querySelector('model-response') ||
                    v.querySelector('[class*="model-response-text" i]') || 
-                   v.querySelector('.markdown, div[class*="markdown" i]');
+                   v.querySelector('.markdown, div[class*="markdown" i]') ||
+                   v.querySelector('[class*="response" i]');
 
       // Check shadowRoot if not found in light DOM
       if (!asstEl && v.shadowRoot) {
@@ -1472,7 +1485,19 @@ function extractGeminiShareMessages(root = document) {
       if (!asstEl && userEl) {
         let sib = userEl.nextElementSibling;
         while (sib) {
-          if (!sib.matches('user-query')) {
+          if (!sib.matches('user-query') && sib.textContent.trim().length > 0) {
+            asstEl = sib;
+            break;
+          }
+          sib = sib.nextElementSibling;
+        }
+      }
+
+      // Check viewer's next sibling if asstEl was mounted outside viewer
+      if (!asstEl) {
+        let sib = v.nextElementSibling;
+        while (sib) {
+          if (!sib.matches('share-turn-viewer') && sib.textContent.trim().length > 0) {
             asstEl = sib;
             break;
           }
@@ -1486,6 +1511,8 @@ function extractGeminiShareMessages(root = document) {
       if (asstEl) {
         extracted.push({ role: 'assistant', contentEl: asstEl });
       }
+
+      Logger.stage2(`[Viewer ${i + 1}/${viewers.length}] Q: ${userEl ? 'found (<' + userEl.tagName + '>)' : 'MISSING'}, A: ${asstEl ? 'found (<' + asstEl.tagName + '>, ' + asstEl.textContent.trim().length + ' chars)' : 'MISSING'}`);
     }
   }
   return extracted;
@@ -1622,6 +1649,7 @@ class ChatMountEngine {
   }
 
   async sweep() {
+    Logger.stage1('Starting dynamic conversational mount sweep...');
     try {
       window.dispatchEvent(new Event('beforeprint'));
     } catch (e) {}
@@ -1637,6 +1665,8 @@ class ChatMountEngine {
     const clientHeight = innerScroller && !isDoc ? innerScroller.clientHeight : window.innerHeight;
     let totalTraversed = 0;
 
+    Logger.stage1(`Active scroll container: <${innerScroller ? innerScroller.tagName : 'WINDOW'}${innerScroller && innerScroller.className ? '.' + String(innerScroller.className).slice(0, 40) : ''}>, clientHeight: ${clientHeight}`);
+
     try {
       // 1. Scroll to top on both window and inner scroller
       window.scrollTo({ top: 0, behavior: 'instant' });
@@ -1651,9 +1681,11 @@ class ChatMountEngine {
       // 3. Sweep downwards if scrollable
       let scrollHeight = isDoc ? (document.documentElement ? document.documentElement.scrollHeight : 0) : innerScroller.scrollHeight;
       let maxScroll = Math.max(0, scrollHeight - clientHeight);
+      Logger.stage1(`Scroll bounds: scrollHeight=${scrollHeight}, maxScroll=${maxScroll}`);
 
       if (maxScroll > 50) {
         let curr = 0;
+        let stepCount = 0;
         const step = Math.max(this.options.stepMin, Math.floor(clientHeight * this.options.stepFraction));
 
         while (curr < maxScroll) {
@@ -1665,20 +1697,20 @@ class ChatMountEngine {
 
           await new Promise(r => setTimeout(r, this.options.stepDelayMs));
           totalTraversed = curr;
+          stepCount++;
 
           scrollHeight = isDoc ? (document.documentElement ? document.documentElement.scrollHeight : 0) : innerScroller.scrollHeight;
           maxScroll = Math.max(0, scrollHeight - clientHeight);
           if (curr >= maxScroll) break;
         }
+        Logger.stage1(`Completed ${stepCount} sweep steps downwards across ${totalTraversed}px.`);
       }
 
       await captureCrossoriginIframes();
 
       // GATE 1: Verify Mount Settle
       const gate1 = this.verifyGate1({ isDoc, totalTraversed, maxScroll });
-      if (!gate1.passed) {
-        console.warn('[GATE 1 WARNING]:', gate1.reason);
-      }
+      Logger.gate('Gate 1 (Mount Sweep)', gate1.passed, gate1.reason);
 
       return { success: true, totalTraversed, gate1, savedScroll, hiddenOverlays };
     } finally {
@@ -1712,6 +1744,7 @@ class ChatInventoryEngine {
 
   async inspect(platform) {
     const url = typeof window !== 'undefined' && window.location ? window.location.href : '';
+    Logger.stage2(`Inspecting chat elements for platform: ${platform} (URL: ${url})`);
 
     let candidateTurns = [];
 
@@ -1719,13 +1752,16 @@ class ChatInventoryEngine {
     if (platform === 'Gemini' || url.includes('gemini.google') || document.querySelectorAll('share-turn-viewer').length > 0) {
       const isShare = url.includes('/share/') || url.includes('share.gemini.google') || document.querySelectorAll('share-turn-viewer').length > 0;
       if (isShare) {
+        Logger.stage2('Using Gemini share page viewer extractor...');
         const shareTurns = extractGeminiShareMessages(document);
         const hasAsst = shareTurns.some(t => t.role === 'assistant');
         if (shareTurns.length > 0 && hasAsst) {
           candidateTurns = shareTurns;
+          Logger.stage2(`Extracted ${shareTurns.length} pairwise turns from share-turn-viewer.`);
         }
       }
       if (candidateTurns.length === 0) {
+        Logger.stage2('Querying live Gemini elements from light and custom element DOM...');
         const liveElements = Array.from(document.querySelectorAll(
           'user-query, response-container, [class*="presented-response" i], [class*="response-container" i], ' +
           'structured-content-container, message-content, model-response, [class*="model-response-text" i], ' +
@@ -1736,11 +1772,13 @@ class ChatInventoryEngine {
           role: classifyTurnRole(el, i, unique.length),
           contentEl: el
         }));
+        Logger.stage2(`Matched ${unique.length} unique Gemini live elements.`);
       }
     } else if (platform === 'ChatGPT' || url.includes('chatgpt.com') || url.includes('chat.openai.com')) {
       const isShare = url.includes('/share/');
       const explicit = Array.from(document.querySelectorAll('[data-message-author-role="user"], [data-message-author-role="assistant"]'));
       if (explicit.length > 0) {
+        Logger.stage2(`Matched ${explicit.length} explicit author-role ChatGPT turns.`);
         candidateTurns = explicit.map(el => ({
           role: (el.getAttribute('data-message-author-role') || '').toLowerCase(),
           contentEl: el
@@ -1748,6 +1786,7 @@ class ChatInventoryEngine {
       } else {
         const articles = Array.from(document.querySelectorAll('article, [data-testid*="conversation-turn"]'));
         if (articles.length > 0) {
+          Logger.stage2(`Matched ${articles.length} ChatGPT article turns.`);
           for (const art of articles) {
             const userSub = art.querySelector('[data-message-author-role="user"], .font-user-message, div[class*="user-message" i], div[class*="user_message" i]');
             const asstSub = art.querySelector('[data-message-author-role="assistant"], .markdown, div[class*="markdown" i], [class*="agent-turn" i]');
@@ -1759,6 +1798,7 @@ class ChatInventoryEngine {
             }
           }
         } else if (isShare) {
+          Logger.stage2('Extracting ChatGPT share page turns...');
           candidateTurns = extractChatGPTShareMessages();
         }
       }
@@ -1769,11 +1809,13 @@ class ChatInventoryEngine {
         'div[class*="assistant-message"], .user-message, .claude-message'
       ));
       const unique = getUniqueElements(claudeEls);
+      Logger.stage2(`Matched ${unique.length} Claude message elements.`);
       candidateTurns = unique.map((el, i) => ({
         role: classifyTurnRole(el, i, unique.length),
         contentEl: el
       }));
     } else if (platform === 'Perplexity' || url.includes('perplexity.ai')) {
+      Logger.stage2('Extracting Perplexity questions and answers...');
       candidateTurns = extractPerplexityMessages();
     } else if (platform === 'Rovo' || url.includes('atlassian')) {
       const isComposerOrToolbar = (el) => {
@@ -1807,6 +1849,7 @@ class ChatInventoryEngine {
       ].join(', ');
       const rovoEls = Array.from(document.querySelectorAll(rovoSelectors)).filter(el => !isComposerOrToolbar(el));
       const unique = getUniqueElements(rovoEls);
+      Logger.stage2(`Matched ${unique.length} Rovo conversational items.`);
       candidateTurns = unique.map((el, i) => ({
         role: classifyTurnRole(el, i, unique.length),
         contentEl: el
@@ -1816,6 +1859,7 @@ class ChatInventoryEngine {
         'div[class*="message" i], div[class*="bubble" i], div[class*="chat-turn" i], div[data-testid*="message" i]'
       ));
       const unique = getUniqueElements(grokEls);
+      Logger.stage2(`Matched ${unique.length} Grok message elements.`);
       candidateTurns = unique.map((el, i) => ({
         role: classifyTurnRole(el, i, unique.length),
         contentEl: el
@@ -1824,8 +1868,10 @@ class ChatInventoryEngine {
 
     // Universal Adaptive Turn Discovery fallback if primary query yielded nothing
     if (candidateTurns.length === 0) {
+      Logger.stage2('Primary discovery yielded 0 turns. Running Universal Adaptive Turn Discovery...');
       const adaptive = extractAdaptiveTurns(document.body);
       candidateTurns = adaptive.map(t => ({ role: t.role, contentEl: t.contentEl }));
+      Logger.stage2(`Adaptive Turn Discovery identified ${candidateTurns.length} candidate turns.`);
     }
 
     // 2. Sort candidate turns strictly by natural loaded DOM document order
@@ -1840,6 +1886,41 @@ class ChatInventoryEngine {
     });
 
     // 3. Catalog and normalize each turn & inventory sub-components
+    let { inventory, stats } = await this.buildInventory(candidateTurns, platform, url);
+
+    // GATE 2 INTEGRITY CHECK & SELF-HEALING AUTO-RECOVERY
+    if (stats.userCount > 1 && stats.asstCount === 0) {
+      Logger.recovery(`Detected ${stats.userCount} user questions but 0 assistant responses. Attempting self-healing recovery...`);
+      candidateTurns = this.recoverInterstitialAssistantTurns(candidateTurns);
+      // Rebuild inventory with recovered turns
+      const rebuilt = await this.buildInventory(candidateTurns, platform, url);
+      inventory = rebuilt.inventory;
+      stats = rebuilt.stats;
+      Logger.recovery(`Post-recovery inventory stats: userCount=${stats.userCount}, asstCount=${stats.asstCount}, tables=${stats.tables}, codeBlocks=${stats.codeBlocks}`);
+    }
+
+    // Verify Gate 2
+    const gate2 = this.verifyGate2(inventory, stats);
+    Logger.gate('Gate 2 (Structural Integrity)', gate2.passed, gate2.passed ? `Verified ${stats.userCount} questions, ${stats.asstCount} answers, ${stats.tables} tables, ${stats.codeBlocks} code blocks` : gate2.reason);
+    if (!gate2.passed) {
+      Logger.error('Gate 2 Structural Integrity Check FAILED. Diagnostic dump:', {
+        inventoryCount: inventory.length,
+        userCount: stats.userCount,
+        asstCount: stats.asstCount,
+        candidateTurnsCount: candidateTurns.length
+      });
+      throw new Error(`Gate 2 Integrity Violation: ${gate2.reason}`);
+    }
+
+    return {
+      success: true,
+      turns: inventory,
+      stats,
+      gate2
+    };
+  }
+
+  async buildInventory(candidateTurns, platform, url) {
     const inventory = [];
     const stats = {
       userCount: 0,
@@ -1882,7 +1963,10 @@ class ChatInventoryEngine {
 
       const text = clone.textContent.trim();
       const hasMedia = clone.querySelector('img, canvas, svg, iframe, table');
-      if (!text && !hasMedia) continue;
+      if (!text && !hasMedia) {
+        Logger.stage2(`[Turn ${i + 1}] Filtered out empty turn <${contentEl.tagName}>`);
+        continue;
+      }
 
       // Inventory sub-components in this turn
       const tables = Array.from(clone.querySelectorAll('table'));
@@ -1900,8 +1984,10 @@ class ChatInventoryEngine {
       if (role === 'user') stats.userCount++;
       else stats.asstCount++;
 
+      Logger.stage2(`[Turn ${inventory.length + 1}/${candidateTurns.length}] role: ${role}, tag: <${contentEl.tagName}>, length: ${text.length} chars, tables: ${tables.length}, codeBlocks: ${codeBlocks.length}`);
+
       inventory.push({
-        index: i,
+        index: inventory.length,
         role,
         html: clone.innerHTML,
         contentEl,
@@ -1917,18 +2003,107 @@ class ChatInventoryEngine {
       });
     }
 
-    // 4. GATE 2: Structural Integrity Gate
-    const gate2 = this.verifyGate2(inventory, stats);
-    if (!gate2.passed) {
-      throw new Error(`Gate 2 Integrity Violation: ${gate2.reason}`);
+    return { inventory, stats };
+  }
+
+  recoverInterstitialAssistantTurns(candidateTurns) {
+    Logger.recovery(`Running interstitial recovery on ${candidateTurns.length} candidate turns...`);
+
+    // Pass A: Re-classify turns that have assistant hallmarks
+    let reclassified = 0;
+    for (const turn of candidateTurns) {
+      if (turn.role === 'user' && turn.contentEl) {
+        const el = turn.contentEl;
+        const isExplicitUser = (el.tagName && el.tagName.toLowerCase() === 'user-query') ||
+                               (el.getAttribute('data-message-author-role') || '').toLowerCase() === 'user';
+        if (!isExplicitUser) {
+          const hasAssistantHallmarks = el.querySelector && el.querySelector('pre, table, .markdown, .prose, .ak-renderer-document');
+          if (hasAssistantHallmarks) {
+            turn.role = 'assistant';
+            reclassified++;
+          }
+        }
+      }
     }
 
-    return {
-      success: true,
-      turns: inventory,
-      stats,
-      gate2
-    };
+    if (reclassified > 0) {
+      Logger.recovery(`Reclassified ${reclassified} mislabeled assistant turns.`);
+      if (candidateTurns.some(t => t.role === 'assistant')) {
+        return candidateTurns;
+      }
+    }
+
+    // Pass B: Interstitial DOM discovery between user questions
+    const userTurns = candidateTurns.filter(t => t.role === 'user');
+    Logger.recovery(`Scanning DOM between ${userTurns.length} user questions...`);
+
+    const paired = [];
+    for (let i = 0; i < userTurns.length; i++) {
+      const u = userTurns[i].contentEl;
+      paired.push({ role: 'user', contentEl: u });
+
+      const nextU = (i + 1 < userTurns.length) ? userTurns[i + 1].contentEl : null;
+      let asstEl = null;
+
+      // 1. Container / Island search
+      const container = u.closest('share-turn-viewer, [data-testid*="turn" i], [class*="turn" i], [class*="row" i], article') || u.parentElement;
+      if (container) {
+        const candidates = Array.from(container.querySelectorAll(
+          'response-container, [class*="presented-response" i], [class*="response-container" i], ' +
+          'message-content, model-response, structured-content-container, .markdown, [class*="markdown" i], ' +
+          '[class*="response" i], [class*="answer" i], .ak-renderer-document, [data-message-author-role="assistant"]'
+        )).filter(el => !el.contains(u) && !u.contains(el));
+
+        if (candidates.length > 0) {
+          asstEl = candidates[candidates.length - 1];
+        } else {
+          const nonUserChildren = Array.from(container.children).filter(c => !c.contains(u) && c !== u && (!nextU || !c.contains(nextU)));
+          if (nonUserChildren.length > 0) {
+            asstEl = nonUserChildren[nonUserChildren.length - 1];
+          }
+        }
+      }
+
+      // 2. Direct sibling walk
+      if (!asstEl) {
+        let sib = u.nextElementSibling;
+        while (sib && sib !== nextU) {
+          if (!sib.contains(u) && (!nextU || !sib.contains(nextU)) && sib.textContent.trim().length > 0) {
+            asstEl = sib;
+            break;
+          }
+          sib = sib.nextElementSibling;
+        }
+      }
+
+      // 3. Parent tree sibling walk
+      if (!asstEl) {
+        let p = u.parentElement;
+        while (p && p !== document.body) {
+          let sib = p.nextElementSibling;
+          while (sib && (!nextU || !sib.contains(nextU))) {
+            if (!sib.contains(u) && sib.textContent.trim().length > 0) {
+              asstEl = sib;
+              break;
+            }
+            sib = sib.nextElementSibling;
+          }
+          if (asstEl) break;
+          p = p.parentElement;
+        }
+      }
+
+      if (asstEl) {
+        const cleanSub = asstEl.querySelector('message-content, [class*="presented-response" i], .markdown, structured-content-container');
+        const finalAsst = cleanSub || asstEl;
+        paired.push({ role: 'assistant', contentEl: finalAsst });
+        Logger.recovery(`[Turn ${i + 1}/${userTurns.length}] Paired: Q=<${u.tagName}> -> A=<${finalAsst.tagName}> (${finalAsst.textContent.trim().length} chars)`);
+      } else {
+        Logger.recovery(`[Turn ${i + 1}/${userTurns.length}] No interstitial response element found in DOM after question.`);
+      }
+    }
+
+    return paired;
   }
 
   verifyGate2(inventory, stats) {
@@ -1948,6 +2123,7 @@ class ChatInventoryEngine {
 
 // Scrape chat messages by platform through the unified gated pipeline
 async function getChatMessages(platform) {
+  Logger.stage1(`Starting getChatMessages for platform: ${platform}`);
   // Stage 1: Mount & Sweep (defer scroll restoration until after inventory inspection)
   const mountEngine = new ChatMountEngine({ skipRestore: true });
   const mountResult = await mountEngine.sweep();
@@ -1957,6 +2133,7 @@ async function getChatMessages(platform) {
     const inventoryEngine = new ChatInventoryEngine();
     const inventoryResult = await inventoryEngine.inspect(platform);
 
+    Logger.stage3(`Inventory verified. Preparing ${inventoryResult.turns.length} turns for Markdown converter.`);
     return inventoryResult.turns.map(t => ({
       role: t.role,
       html: t.html,

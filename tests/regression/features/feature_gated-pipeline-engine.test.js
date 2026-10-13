@@ -142,4 +142,41 @@ describe('[FEATURE] Gated AI Chat Pipeline Architecture Regression Suite', () =>
     expect(result.markdown).toContain('| Fenugreek seeds | 1 tsp |');
     expect(result.filename).toBe('Recipe_Ingredients.md');
   });
+
+  test('Stage 2 Interstitial Auto-Recovery self-heals when initial query only yields user questions', async () => {
+    eval(contentJsCode + `
+      window.ChatInventoryEngine = ChatInventoryEngine;
+      window.getChatMessages = getChatMessages;
+    `);
+
+    // Simulate scenario where primary query only matched user questions, but assistant responses are in interstitial DOM
+    document.body.innerHTML = `
+      <div class="chat-thread">
+        <user-query><p>What is fenugreek good for?</p></user-query>
+        <div class="unclassed-response-container">
+          <div class="markdown"><p>Fenugreek has several metabolic benefits and can help with glucose regulation.</p></div>
+        </div>
+        <user-query><p>Can I take 500mg daily?</p></user-query>
+        <div class="unclassed-response-container">
+          <div class="markdown"><p>Yes, standard clinical dosages typically range from 500mg to 1000mg.</p></div>
+        </div>
+      </div>
+    `;
+
+    delete window.location;
+    window.location = new URL('https://gemini.google.com/app/chat-123');
+
+    const inventoryEngine = new window.ChatInventoryEngine();
+    const invRes = await inventoryEngine.inspect('Gemini');
+
+    expect(invRes.success).toBe(true);
+    expect(invRes.gate2.passed).toBe(true);
+    expect(invRes.stats.userCount).toBe(2);
+    expect(invRes.stats.asstCount).toBe(2);
+    expect(invRes.turns.length).toBe(4);
+    expect(invRes.turns[0].role).toBe('user');
+    expect(invRes.turns[1].role).toBe('assistant');
+    expect(invRes.turns[2].role).toBe('user');
+    expect(invRes.turns[3].role).toBe('assistant');
+  });
 });
