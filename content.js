@@ -1,4 +1,4 @@
-const CONTENT_SCRIPT_VERSION = '1.2.6';
+const CONTENT_SCRIPT_VERSION = '1.2.7';
 if (typeof window !== 'undefined') {
   window.__AI_EXPORTER_VERSION__ = CONTENT_SCRIPT_VERSION;
 }
