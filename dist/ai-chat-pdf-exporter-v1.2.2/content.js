@@ -1,4 +1,4 @@
-const CONTENT_SCRIPT_VERSION = '1.2.16';
+const CONTENT_SCRIPT_VERSION = '1.2.17';
 if (typeof window !== 'undefined') {
   window.__AI_EXPORTER_VERSION__ = CONTENT_SCRIPT_VERSION;
 }
@@ -41,7 +41,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     (async () => {
       try {
         Logger.stage1(`Initiating 3-stage gated chat export for platform: ${message.platform}`);
-        const messages = await getChatMessages(message.platform);
+        const messages = await getChatMessages(message.platform, message.ssrHtml);
         const mathStylesheets = getPageStylesheets();
         Logger.stage2(`Successfully extracted and verified ${messages.length} conversation turns.`);
         sendResponse({ success: true, messages, mathStylesheets, version: CONTENT_SCRIPT_VERSION });
@@ -2597,9 +2597,34 @@ class ChatInventoryEngine {
 }
 
 // Scrape chat messages by platform through the unified gated pipeline
-async function getChatMessages(platform) {
+async function getChatMessages(platform, ssrHtml = null) {
   Logger.stage1(`Starting getChatMessages for platform: ${platform}`);
   const inventoryEngine = new ChatInventoryEngine();
+
+  // SSR PRE-EMPTION PATH (for ChatGPT /share/ pages where DOM is virtualized or scripts stripped by React):
+  if (ssrHtml) {
+    try {
+      Logger.stage1('Processing pre-fetched SSR payload from extension...');
+      const parser = new DOMParser();
+      const parsedDoc = parser.parseFromString(ssrHtml, 'text/html');
+      const ssrTurns = await extractChatGPTShareSSR(parsedDoc);
+      if (ssrTurns.length > 0) {
+        Logger.stage1(`Successfully extracted ${ssrTurns.length} turns from pre-fetched SSR HTML.`);
+        const url = typeof window !== 'undefined' && window.location ? window.location.href : '';
+        const inventoryRes = await inventoryEngine.buildInventory(ssrTurns, platform, url);
+        const gate2 = inventoryEngine.verifyGate2(inventoryRes.inventory, inventoryRes.stats);
+        if (gate2.passed) {
+          return inventoryRes.inventory.map(t => ({
+            role: t.role,
+            html: t.html,
+            components: t.components
+          }));
+        }
+      }
+    } catch (e) {
+      Logger.warn(`Failed to process pre-fetched SSR HTML (${e.message}). Falling back to DOM pipeline...`);
+    }
+  }
 
   // FAST PATH (Immediate extraction):
   // If the conversation turns are already present and visible in the DOM (e.g. ChatGPT, Claude, active tab),
@@ -2619,7 +2644,7 @@ async function getChatMessages(platform) {
   }
 
   // SWEEP PATH (Lazy/virtualized chats like Gemini):
-  const mountEngine = new ChatMountEngine({ skipRestore: false });
+  const mountEngine = new ChatMountEngine({ skipRestore: true });
   const mountResult = await mountEngine.sweep();
 
   try {

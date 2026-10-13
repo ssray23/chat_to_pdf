@@ -8,7 +8,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Dynamically sync version badge with manifest
   try {
-    const v = (chrome.runtime && chrome.runtime.getManifest && chrome.runtime.getManifest().version) || '1.2.16';
+    const v = (chrome.runtime && chrome.runtime.getManifest && chrome.runtime.getManifest().version) || '1.2.17';
     const vBadge = document.querySelector('.version');
     if (vBadge) vBadge.textContent = `v${v}`;
   } catch (e) {}
@@ -123,7 +123,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       try {
         let response;
         let needsInject = false;
-        const currentVersion = (chrome.runtime && chrome.runtime.getManifest && chrome.runtime.getManifest().version) || '1.2.16';
+        const currentVersion = (chrome.runtime && chrome.runtime.getManifest && chrome.runtime.getManifest().version) || '1.2.17';
         console.log(`[AI Exporter Popup] Starting export for ${platform} tab. Target version: v${currentVersion}`);
 
         try {
@@ -170,8 +170,46 @@ document.addEventListener('DOMContentLoaded', async () => {
           }
         }
 
+        let ssrHtml = null;
+        if (activeTab.url && activeTab.url.includes('/share/')) {
+          console.log('[AI Exporter Popup] Detected share URL. Pre-fetching SSR HTML with host permissions...');
+          try {
+            const resp = await fetch(activeTab.url);
+            if (resp.ok) {
+              ssrHtml = await resp.text();
+              console.log(`[AI Exporter Popup] Pre-fetched ${ssrHtml.length} bytes of SSR HTML via extension fetch.`);
+            }
+          } catch (e) {
+            console.warn('[AI Exporter Popup] Extension fetch failed:', e);
+          }
+
+          if (!ssrHtml && chrome.scripting && chrome.scripting.executeScript) {
+            try {
+              console.log('[AI Exporter Popup] Attempting main-world fetch via chrome.scripting...');
+              const results = await chrome.scripting.executeScript({
+                target: { tabId: activeTab.id },
+                world: 'MAIN',
+                func: async () => {
+                  try {
+                    const r = await fetch(window.location.href);
+                    return await r.text();
+                  } catch (e) {
+                    return null;
+                  }
+                }
+              });
+              if (results && results[0] && results[0].result) {
+                ssrHtml = results[0].result;
+                console.log(`[AI Exporter Popup] Main-world fetch succeeded (${ssrHtml.length} bytes).`);
+              }
+            } catch (e) {
+              console.warn('[AI Exporter Popup] Main-world script execution failed:', e);
+            }
+          }
+        }
+
         console.log('[AI Exporter Popup] Sending export_chat command to content script...');
-        response = await chrome.tabs.sendMessage(activeTab.id, { action: 'export_chat', platform });
+        response = await chrome.tabs.sendMessage(activeTab.id, { action: 'export_chat', platform, ssrHtml });
         console.log('[AI Exporter Popup] export_chat response received:', { success: response && response.success, count: response && response.messages ? response.messages.length : 0 });
 
         if (response && response.success) {
