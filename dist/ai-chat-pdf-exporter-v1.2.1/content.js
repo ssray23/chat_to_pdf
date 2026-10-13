@@ -1,4 +1,4 @@
-const CONTENT_SCRIPT_VERSION = '1.2.13';
+const CONTENT_SCRIPT_VERSION = '1.2.14';
 if (typeof window !== 'undefined') {
   window.__AI_EXPORTER_VERSION__ = CONTENT_SCRIPT_VERSION;
 }
@@ -479,7 +479,7 @@ function cleanNoise(clone) {
 
     const text = el.textContent.trim();
     const isFeedbackOrDebug = /good response|bad response|debug response|provide feedback|give feedback|was this helpful|rate response|report response|thumbs up|thumbs down/i.test(text);
-    const isActionControl = isFeedbackOrDebug || /^(copy|share|retry|thumbs|good|bad|submit|add|cancel|edit|auto|\+\d+|\+add)$/i.test(text);
+    const isActionControl = isFeedbackOrDebug || /^(copy|share|retry|thumbs|good|bad|submit|add|cancel|edit|auto|\+\d+|\+add|\d{1,4})$/i.test(text);
 
     const isSourcesPill = !isFeedbackOrDebug && (
       (el.matches && el.matches('[data-testid*="source" i], [class*="source" i], [data-testid*="reference" i]')) || 
@@ -598,7 +598,15 @@ function cleanNoise(clone) {
     '[aria-label*="copy" i]',
     '[aria-label*="Submit" i]',
     '[aria-label*="Add sources" i]',
-    '[aria-label*="Auto" i]'
+    '[aria-label*="Auto" i]',
+    // ChatGPT Search, Citation and Source count badges
+    '[data-testid*="citation" i]',
+    '[class*="citation" i]',
+    '[class*="source-badge" i]',
+    '[class*="sources-badge" i]',
+    '[class*="search-badge" i]',
+    '[aria-label*="source" i]',
+    '[aria-label*="citation" i]'
   ];
 
   noiseSelectors.forEach(selector => {
@@ -611,6 +619,14 @@ function cleanNoise(clone) {
   clone.querySelectorAll('h1, h2, h3, h4, h5, h6, span, div, p').forEach(el => {
     const txt = el.textContent.trim();
     if (/^(You said|ChatGPT said|Claude said|User said):?$/i.test(txt)) {
+      el.remove();
+    }
+  });
+
+  // Remove standalone digit badge elements (e.g. search source count "9", citation badge)
+  clone.querySelectorAll('span, div, button, a').forEach(el => {
+    if (el.children.length === 0 && /^\s*\d{1,3}\s*$/.test(el.textContent)) {
+      if (el.closest('table, pre, code, ol, ul')) return;
       el.remove();
     }
   });

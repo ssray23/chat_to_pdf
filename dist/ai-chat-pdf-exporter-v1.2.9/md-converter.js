@@ -1021,6 +1021,9 @@
     // 8. Clean redundant screen-reader artifact lines if any sneaked through
     out = out.replace(/^[> ]*#{1,6}\s*(?:You said|ChatGPT said|Claude said):?\s*$/gmi, '');
 
+    // 8b. Clean stray solitary citation numbers or search badges (e.g. solitary "9" between blocks)
+    out = out.replace(/(?:\r?\n|^)[ \t]*\d{1,3}[ \t]*(?=\r?\n+(?:#{1,6}\s+|<table|---|<img|<div|\*\*|[A-Z]|$))/g, '');
+
     // 9. Clean up multiple newlines before table formatting
     out = out.replace(/\n{3,}/g, '\n\n');
 
@@ -1133,7 +1136,7 @@ ${cleanBody ? `<div style="margin-top: 6px; line-height: 1.5;">${cleanBody}</div
       if (imgs.length < 2) return groupMatch;
 
       const maxCols = imgs.length === 2 || imgs.length === 4 ? 2 : 3;
-      const defaultColWidth = maxCols === 2 ? 250 : 220;
+      const defaultColWidth = maxCols === 2 ? 250 : 215;
 
       let rowsHtml = '';
       for (let i = 0; i < imgs.length; i += maxCols) {
@@ -1141,18 +1144,20 @@ ${cleanBody ? `<div style="margin-top: 6px; line-height: 1.5;">${cleanBody}</div
         let cellsHtml = '';
         for (let c = 0; c < chunk.length; c++) {
           const item = chunk[c];
+          const isFirstInRow = c === 0;
           const isLastInRow = c === chunk.length - 1;
-          const paddingRight = isLastInRow ? '0' : '12px';
+          const padLeft = isFirstInRow ? '16px' : '10px';
+          const padRight = isLastInRow ? '16px' : '10px';
           const w = item.width || defaultColWidth;
           const imgTag = `<img src="${item.src}" width="${w}" style="border-radius: 8px; display: block;" alt="${item.alt}" />`;
           const content = item.href ? `<a href="${item.href}" target="_blank">${imgTag}</a>` : imgTag;
 
-          cellsHtml += `<td style="border: none; padding: 0 ${paddingRight} 12px 0; vertical-align: top;">\n${content}\n</td>\n`;
+          cellsHtml += `<td style="border: none; padding: 14px ${padRight} 16px ${padLeft}; vertical-align: top;">\n${content}\n</td>\n`;
         }
         rowsHtml += `<tr>\n${cellsHtml.trim()}\n</tr>\n`;
       }
 
-      return `\n\n<table style="border: none; border-collapse: collapse; margin: 16px 0;">\n${rowsHtml.trim()}\n</table>\n\n`;
+      return `\n\n<table style="border: none; border-collapse: collapse; margin: 18px 0 24px 0;">\n${rowsHtml.trim()}\n</table>\n\n`;
     });
 
     // 2. Control sizing for remaining standalone images so they are not giant / oversized

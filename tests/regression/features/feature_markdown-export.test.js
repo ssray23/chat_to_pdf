@@ -635,13 +635,47 @@ What next?
 
       const result = convertChatToMarkdown(chatData);
 
-      // Verify 3 images are converted into a gallery table with width=220 thumbnails
-      expect(result.markdown).toContain('<table style="border: none; border-collapse: collapse; margin: 16px 0;">');
-      expect(result.markdown).toContain('<img src="https://example.com/dish1.jpg" width="220" style="border-radius: 8px; display: block;" alt="Bowl of chicken curry" />');
-      expect(result.markdown).toContain('<img src="https://example.com/dish2.jpg" width="220" style="border-radius: 8px; display: block;" alt="Pan with curry" />');
-      expect(result.markdown).toContain('<img src="https://example.com/dish3.jpg" width="220" style="border-radius: 8px; display: block;" alt="Plated curry" />');
+      // Verify 3 images are converted into a gallery table with width=215 thumbnails and generous edge padding
+      expect(result.markdown).toContain('<table style="border: none; border-collapse: collapse; margin: 18px 0 24px 0;">');
+      expect(result.markdown).toContain('padding: 14px 10px 16px 16px;');
+      expect(result.markdown).toContain('padding: 14px 10px 16px 10px;');
+      expect(result.markdown).toContain('padding: 14px 16px 16px 10px;');
+      expect(result.markdown).toContain('<img src="https://example.com/dish1.jpg" width="215" style="border-radius: 8px; display: block;" alt="Bowl of chicken curry" />');
+      expect(result.markdown).toContain('<img src="https://example.com/dish2.jpg" width="215" style="border-radius: 8px; display: block;" alt="Pan with curry" />');
+      expect(result.markdown).toContain('<img src="https://example.com/dish3.jpg" width="215" style="border-radius: 8px; display: block;" alt="Plated curry" />');
       // No raw unconstrained markdown image syntax left for the 3 images
       expect(result.markdown).not.toContain('![Bowl of chicken curry]');
+    });
+
+    test('postProcessMarkdown cleans stray search source badge counts (e.g. solitary "9" between blocks)', () => {
+      const chatData = {
+        platform: 'ChatGPT',
+        title: 'Recipe With Source Badge',
+        messages: [
+          {
+            role: 'user',
+            html: '<div class="whitespace-pre-wrap">Show tamarind chicken with sources.</div>'
+          },
+          {
+            role: 'assistant',
+            html: `
+              <div class="markdown">
+                <p>Curry is ready.</p>
+                <p>
+                  <img src="https://example.com/dish1.jpg" alt="Dish 1" />
+                  <img src="https://example.com/dish2.jpg" alt="Dish 2" />
+                </p>
+                <p>9</p>
+                <h3>Cooking method</h3>
+              </div>
+            `
+          }
+        ]
+      };
+
+      const result = convertChatToMarkdown(chatData);
+      expect(result.markdown).not.toMatch(/(?:\r?\n|^)\s*9\s*(?:\r?\n|$)/);
+      expect(result.markdown).toContain('### Cooking method');
     });
 
     test('formatImageGalleriesAndSize constrains standalone images to prevent oversized rendering', () => {
