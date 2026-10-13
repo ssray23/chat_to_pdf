@@ -797,10 +797,10 @@
 
       const borderStyle = i > 0 ? 'border-top: 1px solid #e5e5e5;' : 'border: none;';
       const row = `  <tr style="${borderStyle}">
-    <td style="border: none; width: 150px; vertical-align: top; padding: 12px 16px 12px 0;">
+    <td style="border: none; width: 176px; vertical-align: top; padding: 16px 20px 16px 16px;">
       ${imgHtml}
     </td>
-    <td style="border: none; vertical-align: top; padding: 12px 0;">
+    <td style="border: none; vertical-align: top; padding: 16px 16px 16px 0;">
       ${title ? `<strong style="font-size: 1.05rem;">${title}</strong>` : ''}
       ${bodyHtml}
     </td>
@@ -821,6 +821,10 @@
     altText = altText.replace(/[\r\n]+/g, ' ').trim();
     const src = resolveImageSrc(imgNode, altText, options);
     if (!src) return '';
+    const displayWidth = imgNode.getAttribute('data-display-width') || imgNode.getAttribute('width') || '';
+    if (displayWidth && parseInt(displayWidth, 10) > 0) {
+      return `![${altText}|${displayWidth}](${src})`;
+    }
     return `![${altText}](${src})`;
   }
 
@@ -1023,7 +1027,10 @@
     // 10. Transform sequential step images followed by numbered instructions into clean 2-column card tables
     out = formatStepImagesIntoTables(out);
 
-    // 11. Final trim and newline clean
+    // 11. Transform image galleries into neat tables and constrain standalone images to prevent oversized rendering
+    out = formatImageGalleriesAndSize(out);
+
+    // 12. Final trim and newline clean
     out = out
       .replace(/\n{3,}/g, '\n\n')
       .trim();
@@ -1095,6 +1102,74 @@ ${cleanBody ? `<div style="margin-top: 6px; line-height: 1.5;">${cleanBody}</div
 
       return `\n\n<table style="border: none; border-collapse: collapse; width: 100%;">\n${styledRows}\n</table>\n\n`;
     });
+  }
+
+  /**
+   * Transforms consecutive image galleries into neat multi-column card tables
+   * and constrains standalone images so they match ChatGPT sizing and never render oversized.
+   */
+  function formatImageGalleriesAndSize(text) {
+    if (!text || !text.includes('![')) return text;
+
+    // 1. Convert consecutive image runs (2 or more) into clean gallery tables
+    const galleryRegex = /(?:\[?!\[([^\]]*)\]\(([^)]+)\)(?:\]\([^)]+\))?[ \t]*(?:\r?\n[ \t]*)*){2,}/g;
+
+    let out = text.replace(galleryRegex, (groupMatch) => {
+      const singleImgRegex = /\[?!\[([^\]]*)\]\(([^)]+)\)(?:\]\(([^)]+)\))?/g;
+      const imgs = [];
+      let m;
+      while ((m = singleImgRegex.exec(groupMatch)) !== null) {
+        const altRaw = m[1] || 'Image';
+        const altParts = altRaw.split('|');
+        const alt = altParts[0].trim();
+        const customW = altParts[1] ? parseInt(altParts[1], 10) : null;
+        imgs.push({
+          alt,
+          src: m[2].trim(),
+          href: m[3] ? m[3].trim() : '',
+          width: customW && customW >= 100 && customW <= 600 ? customW : null
+        });
+      }
+      if (imgs.length < 2) return groupMatch;
+
+      const maxCols = imgs.length === 2 || imgs.length === 4 ? 2 : 3;
+      const defaultColWidth = maxCols === 2 ? 250 : 220;
+
+      let rowsHtml = '';
+      for (let i = 0; i < imgs.length; i += maxCols) {
+        const chunk = imgs.slice(i, i + maxCols);
+        let cellsHtml = '';
+        for (let c = 0; c < chunk.length; c++) {
+          const item = chunk[c];
+          const isLastInRow = c === chunk.length - 1;
+          const paddingRight = isLastInRow ? '0' : '12px';
+          const w = item.width || defaultColWidth;
+          const imgTag = `<img src="${item.src}" width="${w}" style="border-radius: 8px; display: block;" alt="${item.alt}" />`;
+          const content = item.href ? `<a href="${item.href}" target="_blank">${imgTag}</a>` : imgTag;
+
+          cellsHtml += `<td style="border: none; padding: 0 ${paddingRight} 12px 0; vertical-align: top;">\n${content}\n</td>\n`;
+        }
+        rowsHtml += `<tr>\n${cellsHtml.trim()}\n</tr>\n`;
+      }
+
+      return `\n\n<table style="border: none; border-collapse: collapse; margin: 16px 0;">\n${rowsHtml.trim()}\n</table>\n\n`;
+    });
+
+    // 2. Control sizing for remaining standalone images so they are not giant / oversized
+    const singleImgPattern = /\[?!\[([^\]]*)\]\(([^)]+)\)(?:\]\(([^)]+)\))?/g;
+    out = out.replace(singleImgPattern, (match, altRaw, src, href) => {
+      altRaw = (altRaw || 'Image').trim();
+      const altParts = altRaw.split('|');
+      const alt = altParts[0].trim();
+      const customW = altParts[1] ? parseInt(altParts[1], 10) : null;
+      const w = customW && customW >= 120 && customW <= 600 ? customW : 340;
+      src = src.trim();
+      const imgTag = `<img src="${src}" width="${w}" style="border-radius: 8px; max-width: 100%; display: block; margin: 14px 0;" alt="${alt}" />`;
+      const wrapped = href ? `<a href="${href.trim()}" target="_blank">${imgTag}</a>` : imgTag;
+      return `\n\n${wrapped}\n\n`;
+    });
+
+    return out;
   }
 
   /**

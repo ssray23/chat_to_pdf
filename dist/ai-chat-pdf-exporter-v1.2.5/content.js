@@ -1,4 +1,4 @@
-const CONTENT_SCRIPT_VERSION = '1.2.12';
+const CONTENT_SCRIPT_VERSION = '1.2.13';
 if (typeof window !== 'undefined') {
   window.__AI_EXPORTER_VERSION__ = CONTENT_SCRIPT_VERSION;
 }
@@ -1140,6 +1140,17 @@ function deepCloneWithShadowsAndSvgs(originalNode) {
     if (rect.width && rect.height) {
       clone.setAttribute('width', rect.width);
       clone.setAttribute('height', rect.height);
+    }
+  }
+
+  // Freeze image display sizes if it's an IMG so markdown exporter knows its original layout size
+  if (originalNode.tagName && originalNode.tagName.toLowerCase() === 'img') {
+    const rect = originalNode.getBoundingClientRect ? originalNode.getBoundingClientRect() : null;
+    const displayWidth = Math.round((rect && rect.width) || originalNode.clientWidth || originalNode.width || 0);
+    const displayHeight = Math.round((rect && rect.height) || originalNode.clientHeight || originalNode.height || 0);
+    if (displayWidth > 0) {
+      clone.setAttribute('data-display-width', displayWidth);
+      clone.setAttribute('data-display-height', displayHeight);
     }
   }
 

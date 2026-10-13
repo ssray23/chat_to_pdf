@@ -8,7 +8,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Dynamically sync version badge with manifest
   try {
-    const v = (chrome.runtime && chrome.runtime.getManifest && chrome.runtime.getManifest().version) || '1.2.12';
+    const v = (chrome.runtime && chrome.runtime.getManifest && chrome.runtime.getManifest().version) || '1.2.13';
     const vBadge = document.querySelector('.version');
     if (vBadge) vBadge.textContent = `v${v}`;
   } catch (e) {}
@@ -123,7 +123,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       try {
         let response;
         let needsInject = false;
-        const currentVersion = (chrome.runtime && chrome.runtime.getManifest && chrome.runtime.getManifest().version) || '1.2.12';
+        const currentVersion = (chrome.runtime && chrome.runtime.getManifest && chrome.runtime.getManifest().version) || '1.2.13';
         console.log(`[AI Exporter Popup] Starting export for ${platform} tab. Target version: v${currentVersion}`);
 
         try {

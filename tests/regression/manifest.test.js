@@ -24,7 +24,7 @@ describe('Manifest V3 Schema & Permissions Regression Suite', () => {
     expect(manifest).toBeDefined();
     expect(manifest.manifest_version).toBe(3);
     expect(manifest.name).toBe('AI Chat PDF Exporter');
-    expect(manifest.version).toBe('1.2.12');
+    expect(manifest.version).toBe('1.2.13');
   });
 
   test('must specify required permissions (storage, activeTab, scripting)', () => {

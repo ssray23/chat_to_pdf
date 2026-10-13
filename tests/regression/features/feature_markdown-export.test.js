@@ -606,6 +606,70 @@ What next?
       expect(result.markdown).toContain('### **tell me how to take this marinated chicken');
       expect(result.markdown).not.toContain('mdDocument');
     });
+
+    test('formatImageGalleriesAndSize packages consecutive dish images into neat 3-column gallery table', () => {
+      const chatData = {
+        platform: 'ChatGPT',
+        title: 'Tamarind Chicken Dinner Recipe',
+        messages: [
+          {
+            role: 'user',
+            html: '<div class="whitespace-pre-wrap">Show me tamarind chicken photos.</div>'
+          },
+          {
+            role: 'assistant',
+            html: `
+              <div class="markdown">
+                <p>The key is to make the sauce thick first, then cook the chicken in it briefly.</p>
+                <p>
+                  <img src="https://example.com/dish1.jpg" alt="Bowl of chicken curry" />
+                  <img src="https://example.com/dish2.jpg" alt="Pan with curry" />
+                  <img src="https://example.com/dish3.jpg" alt="Plated curry" />
+                </p>
+                <h3>Cooking method</h3>
+              </div>
+            `
+          }
+        ]
+      };
+
+      const result = convertChatToMarkdown(chatData);
+
+      // Verify 3 images are converted into a gallery table with width=220 thumbnails
+      expect(result.markdown).toContain('<table style="border: none; border-collapse: collapse; margin: 16px 0;">');
+      expect(result.markdown).toContain('<img src="https://example.com/dish1.jpg" width="220" style="border-radius: 8px; display: block;" alt="Bowl of chicken curry" />');
+      expect(result.markdown).toContain('<img src="https://example.com/dish2.jpg" width="220" style="border-radius: 8px; display: block;" alt="Pan with curry" />');
+      expect(result.markdown).toContain('<img src="https://example.com/dish3.jpg" width="220" style="border-radius: 8px; display: block;" alt="Plated curry" />');
+      // No raw unconstrained markdown image syntax left for the 3 images
+      expect(result.markdown).not.toContain('![Bowl of chicken curry]');
+    });
+
+    test('formatImageGalleriesAndSize constrains standalone images to prevent oversized rendering', () => {
+      const chatData = {
+        platform: 'ChatGPT',
+        title: 'Single Image Response',
+        messages: [
+          {
+            role: 'user',
+            html: '<div class="whitespace-pre-wrap">Show me a single dish photo.</div>'
+          },
+          {
+            role: 'assistant',
+            html: `
+              <div class="markdown">
+                <p>Here is the completed dish:</p>
+                <p><img src="https://example.com/single.jpg" alt="Tamarind Chicken" /></p>
+              </div>
+            `
+          }
+        ]
+      };
+
+      const result = convertChatToMarkdown(chatData);
+
+      expect(result.markdown).toContain('<img src="https://example.com/single.jpg" width="340" style="border-radius: 8px; max-width: 100%; display: block; margin: 14px 0;" alt="Tamarind Chicken" />');
+      expect(result.markdown).not.toContain('![Tamarind Chicken](https://example.com/single.jpg)');
+    });
   });
 });
 
