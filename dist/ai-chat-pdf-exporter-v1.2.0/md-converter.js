@@ -1038,45 +1038,60 @@
     if (!text || !text.includes('![')) return text;
 
     // Pattern matches an image immediately followed by a numbered instruction (e.g. 1. Build... or **1. Build...**)
-    // and subsequent instruction paragraphs up until the next image, major heading, or table.
-    const stepRegex = /!\[([^\]]*)\]\(([^)]+)\)\n+((?:\*{1,2}|#{1,4}\s*)?\d+[\.\)][ \t]*[^\n]+)((?:\n(?!\n\!\[|\n#{1,3}\s+|\n<table)[^\n]+)*)/g;
+    // and captures all subsequent instruction paragraphs up until the next step image, major heading, divider, or table.
+    const stepPattern = /!\[([^\]]*)\]\(([^)]+)\)\n+((?:\*{1,2}|#{1,4}\s*)?\d+[\.\)][ \t]*[^\n]+)([\s\S]*?)(?=(?:\n+!\[[^\]]*\]\([^)]+\)\n+(?:\*{1,2}|#{1,4}\s*)?\d+[\.\)])|(?:\n+#{1,4}\s+)|\n+---|\n+<table|$)/g;
 
     let matchCount = 0;
-    const tagged = text.replace(stepRegex, (match, alt, src, title, body) => {
+    const tagged = text.replace(stepPattern, (match, alt, src, title, body) => {
       matchCount++;
       alt = (alt || 'Step image').trim();
       src = src.trim();
       const cleanTitle = title.replace(/^[\s#*]+|[\s*]+$/g, '').trim();
-      const cleanBody = (body || '').trim().replace(/\s\s+\n/g, '<br>').replace(/\n+/g, '<br>');
+      
+      // Clean and join all body paragraphs with <br><br>
+      const cleanBody = (body || '')
+        .trim()
+        .split(/\n\s*\n/)
+        .map(p => p.trim().replace(/\s\s+\n/g, '<br>').replace(/\n+/g, ' '))
+        .filter(Boolean)
+        .join('<br><br>');
 
+      // CRITICAL FOR TYPORA / COMMONMARK:
+      // 1. Absolutely NO leading whitespace/indentation on ANY line (prevents CommonMark indented code block trigger)
+      // 2. Absolutely NO blank lines inside the table (prevents CommonMark HTML block termination)
       return `<!--STEP_CARD_START-->
-  <tr>
-    <td style="border: none; width: 150px; vertical-align: top; padding: 12px 16px 12px 0;">
-      <img src="${src}" width="140" style="border-radius: 8px; display: block;" alt="${alt}" />
-    </td>
-    <td style="border: none; vertical-align: top; padding: 12px 0;">
-      <strong style="font-size: 1.05rem;">${cleanTitle}</strong>
-      ${cleanBody ? `<div style="margin-top: 6px; line-height: 1.5;">${cleanBody}</div>` : ''}
-    </td>
-  </tr>
+<tr>
+<td style="border: none; width: 150px; vertical-align: top; padding: 12px 16px 12px 0;">
+<img src="${src}" width="140" style="border-radius: 8px; display: block;" alt="${alt}" />
+</td>
+<td style="border: none; vertical-align: top; padding: 12px 0;">
+<strong style="font-size: 1.05rem;">${cleanTitle}</strong>
+${cleanBody ? `<div style="margin-top: 6px; line-height: 1.5;">${cleanBody}</div>` : ''}
+</td>
+</tr>
 <!--STEP_CARD_END-->`;
     });
 
     if (matchCount === 0) return text;
 
-    // Group adjacent STEP_CARD entries into a single <table>...</table>
+    // Group adjacent STEP_CARD entries into a single continuous <table> without blank lines or indentation
     return tagged.replace(/(?:<!--STEP_CARD_START-->\s*<tr>[\s\S]*?<\/tr>\s*<!--STEP_CARD_END-->\s*)+/g, (groupMatch) => {
-      const rows = groupMatch
+      const rawRows = groupMatch
         .replace(/<!--STEP_CARD_START-->/g, '')
         .replace(/<!--STEP_CARD_END-->/g, '')
         .trim();
 
       let rowIndex = 0;
-      const styledRows = rows.replace(/<tr>/g, () => {
-        const style = rowIndex > 0 ? 'style="border-top: 1px solid #e5e5e5;"' : 'style="border: none;"';
-        rowIndex++;
-        return `<tr ${style}>`;
-      });
+      const styledRows = rawRows
+        .split(/(?=<tr>)/)
+        .map(r => r.trim())
+        .filter(Boolean)
+        .map(r => {
+          const borderStyle = rowIndex > 0 ? 'style="border-top: 1px solid #e5e5e5;"' : 'style="border: none;"';
+          rowIndex++;
+          return r.replace(/^<tr>/, `<tr ${borderStyle}>`);
+        })
+        .join('\n');
 
       return `\n\n<table style="border: none; border-collapse: collapse; width: 100%;">\n${styledRows}\n</table>\n\n`;
     });
