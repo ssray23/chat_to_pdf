@@ -965,7 +965,7 @@ function normalizeGeminiTurn(clone, role) {
   // 1. Remove Gemini UI action bars, draft pickers, and tool drawers
   clone.querySelectorAll(
     '.message-actions, button-row, .action-row, .action-area, [data-testid*="draft" i], ' +
-    '[class*="draft" i], .export-menu, .response-feedback'
+    '[class*="draft" i], .export-menu, .response-feedback, .response-container-header, .response-container-footer'
   ).forEach(el => el.remove());
 
   // 2. On user turns, remove Gemini duplicate internal preview title (<h5>)
@@ -1113,10 +1113,11 @@ function isUserTurn(el) {
 
   const tagName = el.tagName ? el.tagName.toLowerCase() : '';
   if (tagName === 'user-query') return true;
-  if (tagName === 'model-response' || tagName === 'message-content') return false;
+  if (tagName === 'model-response' || tagName === 'message-content' || tagName === 'response-container' || tagName === 'structured-content-container') return false;
+  if (el.className && typeof el.className === 'string' && (el.className.includes('presented-response') || el.className.includes('response-container'))) return false;
 
   const hasAsstChild = el.querySelector && el.querySelector(
-    '[data-message-author-role="assistant"], model-response, message-content, [class*="model-response" i], .markdown, div[class*="markdown" i]'
+    '[data-message-author-role="assistant"], model-response, message-content, response-container, [class*="presented-response" i], [class*="response-container" i], [class*="model-response" i], .markdown, div[class*="markdown" i]'
   );
   const hasUserChild = el.querySelector && el.querySelector(
     '[data-message-author-role="user"], user-query, [class*="user-query" i]'
@@ -1133,8 +1134,8 @@ function isUserTurn(el) {
   const testId = (el.getAttribute('data-testid') || '').toLowerCase();
   const className = el.className && typeof el.className === 'string' ? el.className.toLowerCase() : '';
 
-  const isExplicitAssistant = /\b(assistant|agent|model-response|message-content|bot-message|rovo-message)\b/i.test(testId) || 
-                              /\b(assistant|agent|claude-message|rovo-assistant)\b/i.test(className) ||
+  const isExplicitAssistant = /\b(assistant|agent|model-response|message-content|response-container|bot-message|rovo-message)\b/i.test(testId) || 
+                              /\b(assistant|agent|claude-message|rovo-assistant|presented-response|response-container)\b/i.test(className) ||
                               className.includes('model-response-text');
 
   if (!isExplicitAssistant) {
@@ -1159,8 +1160,7 @@ function isUserTurn(el) {
     const cs = window.getComputedStyle(el);
     const col = cs.color || '';
     if (/rgba?\(25[0-5],\s*25[0-5],\s*25[0-5]/.test(col) && el.textContent.trim().length > 0) {
-      const bg = cs.backgroundColor || '';
-      if (bg && bg !== 'transparent' && bg !== 'rgba(0, 0, 0, 0)') {
+      if (hasUserBubbleStyle(el)) {
         return true;
       }
     }
@@ -1196,21 +1196,25 @@ function classifyTurnRole(el, index = 0, totalTurns = 1) {
   if (authorRole === 'user' || authorRole === 'human') return 'user';
   if (authorRole === 'assistant' || authorRole === 'agent' || authorRole === 'model' || authorRole === 'bot') return 'assistant';
 
-  // 2. Prioritize user turn detection
-  if (isUserTurn(el)) return 'user';
-
-  // 3. Assistant semantic signals
+  // 2. Explicit tag names
   const tagName = el.tagName ? el.tagName.toLowerCase() : '';
-  if (tagName === 'model-response' || tagName === 'message-content') return 'assistant';
+  if (tagName === 'user-query') return 'user';
+  if (tagName === 'model-response' || tagName === 'message-content' || tagName === 'response-container' || tagName === 'structured-content-container') return 'assistant';
 
+  // 3. Explicit assistant classes / testids
   const testId = (el.getAttribute('data-testid') || '').toLowerCase();
   const className = el.className && typeof el.className === 'string' ? el.className.toLowerCase() : '';
 
-  if (/\b(assistant|agent|model-response|message-content|bot-message|rovo)\b/i.test(className) || 
-      /\b(assistant|agent|model-response|message-content|bot-message|rovo)\b/i.test(testId) ||
-      className.includes('model-response-text')) {
+  if (/\b(assistant|agent|model-response|message-content|response-container|bot-message|rovo)\b/i.test(className) || 
+      /\b(assistant|agent|model-response|message-content|response-container|bot-message|rovo)\b/i.test(testId) ||
+      className.includes('model-response-text') ||
+      className.includes('presented-response') ||
+      className.includes('response-container')) {
     return 'assistant';
   }
+
+  // 4. Prioritize user turn detection
+  if (isUserTurn(el)) return 'user';
 
   if (el.classList.contains('ak-renderer-document') || (el.querySelector && el.querySelector('.ak-renderer-document'))) {
     return 'assistant';
@@ -1451,6 +1455,11 @@ function extractGeminiShareMessages(root = document) {
       const v = viewers[i];
       const userEl = v.querySelector('user-query');
       const asstEl = v.querySelector('message-content') || 
+                     v.querySelector('response-container') ||
+                     v.querySelector('[class*="presented-response" i]') ||
+                     v.querySelector('[class*="response-container" i]') ||
+                     v.querySelector('structured-content-container') ||
+                     v.querySelector('model-response') ||
                      v.querySelector('[class*="model-response-text" i]') || 
                      v.querySelector('.markdown, div[class*="markdown" i]');
       if (userEl) {
@@ -1653,13 +1662,15 @@ class ChatMountEngine {
         console.warn('[GATE 1 WARNING]:', gate1.reason);
       }
 
-      return { success: true, totalTraversed, gate1 };
+      return { success: true, totalTraversed, gate1, savedScroll, hiddenOverlays };
     } finally {
       try {
         window.dispatchEvent(new Event('afterprint'));
       } catch (e) {}
-      restoreScrollPositions(savedScroll);
-      restoreOverlays(hiddenOverlays);
+      if (!this.options.skipRestore) {
+        restoreScrollPositions(savedScroll);
+        restoreOverlays(hiddenOverlays);
+      }
     }
   }
 
@@ -1697,7 +1708,9 @@ class ChatInventoryEngine {
       }
       if (candidateTurns.length === 0) {
         const liveElements = Array.from(document.querySelectorAll(
-          'user-query, model-response, message-content, [class*="model-response-text" i], [class*="query-text" i], .query-text-container, .model-response-container'
+          'user-query, response-container, [class*="presented-response" i], [class*="response-container" i], ' +
+          'structured-content-container, message-content, model-response, [class*="model-response-text" i], ' +
+          '[class*="query-text" i], .query-text-container, .model-response-container'
         ));
         const unique = getUniqueElements(liveElements);
         candidateTurns = unique.map((el, i) => ({
@@ -1916,17 +1929,26 @@ class ChatInventoryEngine {
 
 // Scrape chat messages by platform through the unified gated pipeline
 async function getChatMessages(platform) {
-  // Stage 1: Mount & Sweep
-  const mountEngine = new ChatMountEngine();
-  await mountEngine.sweep();
+  // Stage 1: Mount & Sweep (defer scroll restoration until after inventory inspection)
+  const mountEngine = new ChatMountEngine({ skipRestore: true });
+  const mountResult = await mountEngine.sweep();
 
-  // Stage 2: Inventory & Inspection
-  const inventoryEngine = new ChatInventoryEngine();
-  const inventoryResult = await inventoryEngine.inspect(platform);
+  try {
+    // Stage 2: Inventory & Inspection
+    const inventoryEngine = new ChatInventoryEngine();
+    const inventoryResult = await inventoryEngine.inspect(platform);
 
-  return inventoryResult.turns.map(t => ({
-    role: t.role,
-    html: t.html,
-    components: t.components
-  }));
+    return inventoryResult.turns.map(t => ({
+      role: t.role,
+      html: t.html,
+      components: t.components
+    }));
+  } finally {
+    if (mountResult && mountResult.savedScroll) {
+      restoreScrollPositions(mountResult.savedScroll);
+    }
+    if (mountResult && mountResult.hiddenOverlays) {
+      restoreOverlays(mountResult.hiddenOverlays);
+    }
+  }
 }
