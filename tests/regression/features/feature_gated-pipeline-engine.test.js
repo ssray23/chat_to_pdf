@@ -179,4 +179,41 @@ describe('[FEATURE] Gated AI Chat Pipeline Architecture Regression Suite', () =>
     expect(invRes.turns[2].role).toBe('user');
     expect(invRes.turns[3].role).toBe('assistant');
   });
+
+  test('Stage 2 extracts live ChatGPT conversation turns even when author role attributes are absent and messages are inside main (.whitespace-pre-wrap and .markdown)', async () => {
+    eval(contentJsCode + `
+      window.ChatInventoryEngine = ChatInventoryEngine;
+      window.getChatMessages = getChatMessages;
+    `);
+
+    // Simulate modern ChatGPT layout where articles have no author role, or messages are within main without data-message-author-role
+    document.body.innerHTML = `
+      <main>
+        <div class="group/conversation-turn" data-testid="conversation-turn-2">
+          <div class="whitespace-pre-wrap">Can you show me the chicken curry recipe?</div>
+        </div>
+        <div class="group/conversation-turn" data-testid="conversation-turn-3">
+          <div class="markdown prose">
+            <h3>Tamarind Chicken Curry</h3>
+            <p>Here are the steps to make delicious curry.</p>
+          </div>
+        </div>
+      </main>
+    `;
+
+    delete window.location;
+    window.location = new URL('https://chatgpt.com/c/6ace682e-97fc-83ed-8598-03ef218df8a9');
+
+    const inventoryEngine = new window.ChatInventoryEngine();
+    const invRes = await inventoryEngine.inspect('ChatGPT');
+
+    expect(invRes.success).toBe(true);
+    expect(invRes.gate2.passed).toBe(true);
+    expect(invRes.stats.userCount).toBe(1);
+    expect(invRes.stats.asstCount).toBe(1);
+    expect(invRes.turns.length).toBe(2);
+    expect(invRes.turns[0].role).toBe('user');
+    expect(invRes.turns[1].role).toBe('assistant');
+  });
 });
+
