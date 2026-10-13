@@ -1,4 +1,4 @@
-const CONTENT_SCRIPT_VERSION = '1.2.5';
+const CONTENT_SCRIPT_VERSION = '1.2.6';
 if (typeof window !== 'undefined') {
   window.__AI_EXPORTER_VERSION__ = CONTENT_SCRIPT_VERSION;
 }
@@ -1479,11 +1479,13 @@ function extractChatGPTShareMessages() {
 
 }
 
-// Extract Gemini live web application content (pairwise .conversation-container cards)
+// Extract Gemini live web application content (pairwise .conversation-container cards and elements)
 function extractGeminiLiveMessages(root = document) {
   const extracted = [];
-  const containers = root.querySelectorAll('.conversation-container, div[class*="conversation-container" i]');
-  Logger.stage2(`Inspecting ${containers.length} live <conversation-container> elements...`);
+  const containers = Array.from(root.querySelectorAll('.conversation-container, div[class*="conversation-container" i], [class*="conversation-turn" i], [class*="chat-turn" i]'));
+  Logger.stage2(`Inspecting ${containers.length} live conversation container elements...`);
+
+  const processedElements = new Set();
 
   if (containers.length > 0) {
     for (let i = 0; i < containers.length; i++) {
@@ -1510,9 +1512,11 @@ function extractGeminiLiveMessages(root = document) {
       }
 
       if (userEl) {
+        processedElements.add(userEl);
         extracted.push({ role: 'user', contentEl: userEl });
       }
       if (asstEl) {
+        processedElements.add(asstEl);
         const deepContent = asstEl.querySelector('message-content, structured-content-container, [class*="presented-response" i], .markdown');
         extracted.push({ role: 'assistant', contentEl: deepContent || asstEl });
       }
@@ -1520,6 +1524,30 @@ function extractGeminiLiveMessages(root = document) {
       Logger.stage2(`[Live Card ${i + 1}/${containers.length}] Q: ${userEl ? 'found (<' + userEl.tagName + '>)' : 'MISSING'}, A: ${asstEl ? 'found (<' + asstEl.tagName + '>, ' + asstEl.textContent.trim().length + ' chars)' : 'MISSING'}`);
     }
   }
+
+  // Safety check: capture any user-query elements outside standard container wrappers (e.g. initial turn or custom wrappers)
+  const allUserQueries = Array.from(root.querySelectorAll('user-query'));
+  const uncapturedQueries = allUserQueries.filter(el => !processedElements.has(el) && !Array.from(processedElements).some(p => p.contains(el) || el.contains(p)));
+  if (uncapturedQueries.length > 0) {
+    Logger.stage2(`Found ${uncapturedQueries.length} uncaptured user-query elements outside containers. Capturing...`);
+    for (const uq of uncapturedQueries) {
+      extracted.push({ role: 'user', contentEl: uq });
+      let sib = uq.nextElementSibling;
+      let foundAsst = null;
+      while (sib) {
+        if (sib.matches && (sib.matches('model-response, response-container, message-content, [class*="model-response" i]') || sib.querySelector('model-response, response-container, message-content'))) {
+          foundAsst = sib;
+          break;
+        }
+        sib = sib.nextElementSibling;
+      }
+      if (foundAsst) {
+        const deep = foundAsst.querySelector('message-content, structured-content-container, .markdown') || foundAsst;
+        extracted.push({ role: 'assistant', contentEl: deep });
+      }
+    }
+  }
+
   return extracted;
 }
 
@@ -1668,22 +1696,32 @@ function extractAdaptiveTurns(root = document.body) {
 function findChatScrollContainer() {
   // 1. Walk up from any rendered message or document
   const sample = document.querySelector(
-    '.ak-renderer-document, [data-testid*="message" i], [class*="message" i], [class*="bubble" i], [data-testid*="user-message" i], user-query, message-content, model-response'
+    '.ak-renderer-document, [data-testid*="message" i], [class*="message" i], [class*="bubble" i], [data-testid*="user-message" i], user-query, message-content, model-response, .conversation-container, div[class*="conversation-container" i]'
   );
   if (sample) {
     let p = sample.parentElement;
     while (p && p !== document.body && p !== document.documentElement) {
       const style = window.getComputedStyle(p);
       const ov = style.overflowY || style.overflow;
-      if (/(auto|scroll)/.test(ov) && p.scrollHeight > p.clientHeight + 40) {
+      if (/(auto|scroll|overlay)/.test(ov) && p.scrollHeight > p.clientHeight + 40) {
         return p;
       }
       p = p.parentElement;
     }
   }
 
+  // Direct check for known chat scroller tags/classes
+  const knownScroller = document.querySelector('infinite-scroller, [class*="infinite-scroller" i], [class*="chat-history" i], chat-window, [class*="chat-scroll" i], [class*="react-scroll-to-bottom" i]');
+  if (knownScroller && knownScroller.scrollHeight > knownScroller.clientHeight + 40) {
+    const style = window.getComputedStyle(knownScroller);
+    const ov = style.overflowY || style.overflow;
+    if (/(auto|scroll|overlay)/.test(ov)) {
+      return knownScroller;
+    }
+  }
+
   // 2. Scan all block elements with scrollable overflow
-  const candidates = Array.from(document.querySelectorAll('div, main, section'));
+  const candidates = Array.from(document.querySelectorAll('div, main, section, infinite-scroller, chat-window, mat-sidenav-content, [class*="scroller" i], [class*="chat" i]'));
   let best = null;
   let maxDiff = 0;
   for (const el of candidates) {
@@ -1691,7 +1729,7 @@ function findChatScrollContainer() {
     if (diff > maxDiff && el.clientHeight > 150) {
       const style = window.getComputedStyle(el);
       const ov = style.overflowY || style.overflow;
-      if (/(auto|scroll)/.test(ov)) {
+      if (/(auto|scroll|overlay)/.test(ov)) {
         best = el;
         maxDiff = diff;
       }
@@ -1711,7 +1749,8 @@ class ChatMountEngine {
       stepFraction: 0.7,
       stepMin: 350,
       stepDelayMs: 60,
-      initialTopDelayMs: 150
+      initialTopDelayMs: 400,
+      maxUpwardIterations: 12
     }, options);
   }
 
@@ -1734,19 +1773,93 @@ class ChatMountEngine {
 
     Logger.stage1(`Active scroll container: <${innerScroller ? innerScroller.tagName : 'WINDOW'}${innerScroller && innerScroller.className ? '.' + String(innerScroller.className).slice(0, 40) : ''}>, clientHeight: ${clientHeight}`);
 
-    try {
-      // 1. Scroll to top on the active scroller
-      if (isDoc) {
-        window.scrollTo({ top: 0, behavior: 'instant' });
-      } else if (innerScroller) {
-        innerScroller.scrollTop = 0;
-      }
-      await new Promise(r => setTimeout(r, this.options.initialTopDelayMs));
+    const scrollBothTo = (top) => {
+      try {
+        if (innerScroller && innerScroller !== document.documentElement && innerScroller !== document.body) {
+          innerScroller.scrollTop = top;
+          innerScroller.dispatchEvent(new Event('scroll', { bubbles: true }));
+        }
+        window.scrollTo({ top, behavior: 'instant' });
+        window.dispatchEvent(new Event('scroll'));
+        if (document.documentElement) {
+          document.documentElement.scrollTop = top;
+        }
+        if (document.body) {
+          document.body.scrollTop = top;
+        }
+      } catch (e) {}
+    };
 
-      // 2. Sweep downwards if scrollable
+    const getTurnCount = () => {
+      return document.querySelectorAll(
+        '.conversation-container, div[class*="conversation-container" i], user-query, [data-testid*="message" i], [class*="message" i], [class*="chat-turn" i], [class*="bubble" i], [data-message-author-role]'
+      ).length;
+    };
+
+    const getFirstTurnSignature = () => {
+      const first = document.querySelector(
+        '.conversation-container, div[class*="conversation-container" i], user-query, [data-testid*="message" i], [class*="chat-turn" i]'
+      );
+      return first ? (first.id || first.textContent.trim().slice(0, 80)) : '';
+    };
+
+    const getScrollHeight = () => {
+      return innerScroller && !isDoc ? innerScroller.scrollHeight : (document.documentElement ? document.documentElement.scrollHeight : 0);
+    };
+
+    try {
+      // 1. UPWARD MOUNT CONVERGENCE LOOP:
+      // In virtualized chats (Gemini, ChatGPT, etc.), older history is dynamically prepended when scrolled to top.
+      // Pulse to top repeatedly until no new turns or content appear.
+      let prevCount = getTurnCount();
+      let prevFirstSig = getFirstTurnSignature();
+      let prevScrollHeight = getScrollHeight();
+      let stableUpwardRounds = 0;
+
+      Logger.stage1(`Initiating upward mount loop (initial turns: ${prevCount}, scrollHeight: ${prevScrollHeight})...`);
+
+      for (let iteration = 0; iteration < this.options.maxUpwardIterations; iteration++) {
+        scrollBothTo(0);
+
+        // Wait for potential network fetch / rendering of prepended history
+        await new Promise(r => setTimeout(r, iteration === 0 ? this.options.initialTopDelayMs : 300));
+
+        // Check if loading spinner is currently visible
+        const hasSpinner = !!document.querySelector('mat-progress-spinner, mat-spinner, [class*="loading" i], [class*="spinner" i], [role="progressbar"]');
+        if (hasSpinner) {
+          Logger.stage1('[Upward Mount] Loading indicator detected. Waiting for prepended batch to settle...');
+          await new Promise(r => setTimeout(r, 400));
+        }
+
+        const newCount = getTurnCount();
+        const newFirstSig = getFirstTurnSignature();
+        const newScrollHeight = getScrollHeight();
+
+        const prependedTurns = newCount > prevCount;
+        const firstTurnChanged = newFirstSig !== prevFirstSig && newFirstSig.length > 0;
+        const heightExpanded = newScrollHeight > prevScrollHeight + 50;
+
+        if (prependedTurns || firstTurnChanged || heightExpanded) {
+          Logger.stage1(`[Upward Mount Iteration ${iteration + 1}] Detected new earlier content prepended (turns: ${prevCount} -> ${newCount}, height: ${prevScrollHeight} -> ${newScrollHeight}).`);
+          prevCount = newCount;
+          prevFirstSig = newFirstSig;
+          prevScrollHeight = newScrollHeight;
+          stableUpwardRounds = 0;
+        } else {
+          stableUpwardRounds++;
+          // Require at least 2 consecutive stable rounds at scrollTop = 0 to confirm top of chat history reached
+          if (stableUpwardRounds >= (iteration === 0 ? 2 : 1)) {
+            Logger.stage1(`[Upward Mount] Reached top of conversation history after ${iteration + 1} iterations (total turns: ${newCount}).`);
+            break;
+          }
+        }
+      }
+
+      // 2. DOWNWARD SWEEP:
+      // Traverse top-to-bottom so lazy renderers (KaTeX/LaTeX, tables, syntax highlighters, images) hydrate into DOM.
       let scrollHeight = isDoc ? (document.documentElement ? document.documentElement.scrollHeight : 0) : innerScroller.scrollHeight;
       let maxScroll = Math.max(0, scrollHeight - clientHeight);
-      Logger.stage1(`Scroll bounds: scrollHeight=${scrollHeight}, maxScroll=${maxScroll}`);
+      Logger.stage1(`Downward sweep bounds: scrollHeight=${scrollHeight}, maxScroll=${maxScroll}`);
 
       if (maxScroll > 50) {
         let curr = 0;
@@ -1759,11 +1872,7 @@ class ChatMountEngine {
 
         while (curr < maxScroll) {
           curr = Math.min(curr + step, maxScroll);
-          if (isDoc) {
-            window.scrollTo({ top: curr, behavior: 'instant' });
-          } else if (innerScroller) {
-            innerScroller.scrollTop = curr;
-          }
+          scrollBothTo(curr);
 
           await new Promise(r => setTimeout(r, this.options.stepDelayMs));
           totalTraversed = curr;
@@ -1773,7 +1882,7 @@ class ChatMountEngine {
           maxScroll = Math.max(0, scrollHeight - clientHeight);
           if (curr >= maxScroll) break;
         }
-        Logger.stage1(`Completed ${stepCount} sweep steps downwards across ${totalTraversed}px.`);
+        Logger.stage1(`Completed downward sweep: ${stepCount} steps across ${totalTraversed}px.`);
       }
 
       // GATE 1: Verify Mount Settle

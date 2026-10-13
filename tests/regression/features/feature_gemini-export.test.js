@@ -338,4 +338,104 @@ describe('[FEATURE] Gemini Shared & Live Chat Export Regression Suite', () => {
     expect(asstMessages[0].html).not.toContain('Gemini said');
     expect(asstMessages[0].html).not.toContain('Copy');
   });
+
+  test('extractGeminiLiveMessages captures turns outside .conversation-container (initial prompt) in exact document order', async () => {
+    eval(contentJsCode + `
+      window.extractGeminiLiveMessages = extractGeminiLiveMessages;
+      window.getChatMessages = getChatMessages;
+    `);
+
+    // Initial prompt outside .conversation-container followed by standard .conversation-container cards
+    document.body.innerHTML = `
+      <div class="chat-viewport">
+        <div class="initial-turn-wrapper">
+          <user-query>
+            <h5>Can you review my chicken curry blueprint for fat loss?</h5>
+            <div class="query-text"><p>Can you review my chicken curry blueprint for fat loss?</p></div>
+          </user-query>
+          <model-response>
+            <message-content>
+              <div class="markdown"><p>Straight off the bat, this curry punches well above its weight for visceral fat reduction.</p></div>
+            </message-content>
+          </model-response>
+        </div>
+        <div class="conversation-container" id="conv-2">
+          <user-query>
+            <h5>i have M&S tamarind paste - will that help?</h5>
+            <div class="query-text"><p>i have M&S tamarind paste - will that help?</p></div>
+          </user-query>
+          <model-response>
+            <message-content>
+              <div class="markdown"><p>Emphatically yes—though with one crucial caveat depending on which protein is in the pot.</p></div>
+            </message-content>
+          </model-response>
+        </div>
+      </div>
+    `;
+
+    delete window.location;
+    window.location = new URL('https://gemini.google.com/app/fe76f1294308a0c8');
+
+    const messages = await window.getChatMessages('Gemini');
+    expect(messages.length).toBe(4);
+    expect(messages[0].role).toBe('user');
+    expect(messages[0].html).toContain('Can you review my chicken curry blueprint for fat loss?');
+    expect(messages[1].role).toBe('assistant');
+    expect(messages[1].html).toContain('Straight off the bat, this curry punches well above its weight');
+    expect(messages[2].role).toBe('user');
+    expect(messages[2].html).toContain('tamarind paste - will that help?');
+    expect(messages[3].role).toBe('assistant');
+    expect(messages[3].html).toContain('Emphatically yes—though with one crucial caveat');
+  });
+
+  test('ChatMountEngine upward mount loop triggers mounting of prepended earlier turns when scrolled to top', async () => {
+    eval(contentJsCode + `
+      window.ChatMountEngine = ChatMountEngine;
+    `);
+
+    const container = document.createElement('div');
+    container.style.overflowY = 'auto';
+    container.style.height = '400px';
+    // Mock scrollHeight and clientHeight for jsdom
+    Object.defineProperty(container, 'clientHeight', { value: 400, configurable: true });
+    Object.defineProperty(container, 'scrollHeight', { value: 1200, writable: true, configurable: true });
+    let currentScrollTop = 800;
+    Object.defineProperty(container, 'scrollTop', {
+      get: () => currentScrollTop,
+      set: (val) => { currentScrollTop = val; },
+      configurable: true
+    });
+
+    container.innerHTML = `
+      <div class="conversation-container" id="turn-2">
+        <user-query><div class="query-text">Turn 2</div></user-query>
+      </div>
+    `;
+    document.body.appendChild(container);
+
+    // Simulate infinite scroller: when scrolled to top (scrollTop === 0), prepend earlier Turn 1
+    container.addEventListener('scroll', () => {
+      if (currentScrollTop === 0 && !container.querySelector('#turn-1')) {
+        const prepended = document.createElement('div');
+        prepended.className = 'conversation-container';
+        prepended.id = 'turn-1';
+        prepended.innerHTML = '<user-query><div class="query-text">Turn 1 (Historical)</div></user-query>';
+        container.insertBefore(prepended, container.firstChild);
+        container.scrollHeight = 1600;
+      }
+    });
+
+    const engine = new window.ChatMountEngine({
+      stepMin: 200,
+      stepDelayMs: 10,
+      initialTopDelayMs: 20,
+      maxUpwardIterations: 4,
+      skipRestore: true
+    });
+
+    const result = await engine.sweep();
+    expect(result.success).toBe(true);
+    expect(container.querySelector('#turn-1')).not.toBeNull();
+    expect(container.querySelectorAll('.conversation-container').length).toBe(2);
+  });
 });

@@ -116,7 +116,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       try {
         let response;
         let needsInject = false;
-        const currentVersion = (chrome.runtime && chrome.runtime.getManifest && chrome.runtime.getManifest().version) || '1.2.5';
+        const currentVersion = (chrome.runtime && chrome.runtime.getManifest && chrome.runtime.getManifest().version) || '1.2.6';
         console.log(`[AI Exporter Popup] Starting export for ${platform} tab. Target version: v${currentVersion}`);
 
         try {
