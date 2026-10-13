@@ -130,6 +130,48 @@ describe('[FEATURE] Markdown (.md) Export Regression Suite', () => {
       expect(md).toContain('- [x] Done task');
       expect(md).toContain('- [ ] Pending task');
     });
+
+    test('converts ordered lists containing step images into clean 2-column card tables', () => {
+      const html = `
+        <ol>
+          <li>
+            <img src="https://example.com/pan.png" alt="Build the aromatic base" />
+            <p><strong>1. Build the aromatic base</strong></p>
+            <p>Heat the oil over medium heat. Add the methi seeds and let them turn just golden.</p>
+          </li>
+          <li>
+            <img src="https://example.com/masala.png" alt="Fry the masala until thick" />
+            <p><strong>2. Fry the masala until thick</strong></p>
+            <p>Add the onion and cook for 5-7 minutes until golden.</p>
+          </li>
+        </ol>
+      `;
+      const md = htmlToMarkdown(html);
+      expect(md).toContain('<table style="border: none; border-collapse: collapse; width: 100%;">');
+      expect(md).toContain('<img src="https://example.com/pan.png" width="140" style="border-radius: 8px; display: block;" alt="Build the aromatic base" />');
+      expect(md).toContain('<strong style="font-size: 1.05rem;">1. Build the aromatic base</strong>');
+      expect(md).toContain('Heat the oil over medium heat.');
+      expect(md).toContain('<tr style="border-top: 1px solid #e5e5e5;">');
+      expect(md).toContain('<img src="https://example.com/masala.png" width="140" style="border-radius: 8px; display: block;" alt="Fry the masala until thick" />');
+    });
+
+    test('supports sidecar extraction for base64 step images in 2-column card tables', () => {
+      const html = `
+        <ol>
+          <li>
+            <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==" alt="Step 1" />
+            <p><strong>1. First Step</strong></p>
+            <p>Do this first.</p>
+          </li>
+        </ol>
+      `;
+      const options = { extractImages: true, images: [], imageFolder: './images' };
+      const md = htmlToMarkdown(html, options);
+      expect(options.images.length).toBe(1);
+      expect(options.images[0].filename).toBe('image_001.png');
+      expect(md).toContain('<img src="./images/image_001.png" width="140" style="border-radius: 8px; display: block;" alt="Step 1" />');
+      expect(md).toContain('<strong style="font-size: 1.05rem;">1. First Step</strong>');
+    });
   });
 
   describe('Tables to GFM Conversion', () => {

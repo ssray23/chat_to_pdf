@@ -599,6 +599,14 @@
 
     // LISTS (ul, ol)
     if (tagName === 'ul' || tagName === 'ol') {
+      const childNodes = Array.from(node.children);
+      const listItems = childNodes.filter(c => c.tagName && c.tagName.toLowerCase() === 'li');
+      const hasStepImages = listItems.some(li => li.querySelector('img') || li.querySelector('.ai-exporter-media-card'));
+
+      if (hasStepImages) {
+        return convertListWithImages(node, options, state);
+      }
+
       const isOrdered = tagName === 'ol';
       const startAttr = parseInt(node.getAttribute('start'), 10);
       let listIndex = !isNaN(startAttr) ? startAttr : 1;
@@ -606,7 +614,6 @@
       const indent = '  '.repeat(listDepth);
 
       let result = '';
-      const childNodes = Array.from(node.children);
 
       for (const child of childNodes) {
         if (child.tagName && child.tagName.toLowerCase() === 'li') {
@@ -661,17 +668,15 @@
   }
 
   /**
-   * Helper to convert an image node, supporting sidecar image extraction
+   * Helper to resolve image source, supporting sidecar image extraction
    */
-  function convertImageNode(imgNode, altText, options) {
+  function resolveImageSrc(imgNode, altText, options) {
     let src = imgNode.getAttribute('src') || '';
     if (!src) return '';
 
     altText = altText || imgNode.getAttribute('alt') || 'Image';
-    // Clean newlines from alt text
     altText = altText.replace(/[\r\n]+/g, ' ').trim();
 
-    // Check if image extraction is enabled and image is base64 data URL
     if (options && options.extractImages && Array.isArray(options.images) && src.startsWith('data:image/')) {
       const ext = getImageExtension(src);
       const imgIndex = options.images.length + 1;
@@ -684,11 +689,138 @@
         alt: altText
       });
 
-      // Reference via relative sidecar path
-      const imgPath = options.imageFolder ? `${options.imageFolder}/${filename}` : `./images/${filename}`;
-      return `![${altText}](${imgPath})`;
+      return options.imageFolder ? `${options.imageFolder}/${filename}` : `./images/${filename}`;
     }
 
+    return src;
+  }
+
+  /**
+   * Strip a matched string prefix across child text nodes without corrupting elements
+   */
+  function removeMatchedPrefix(el, prefix) {
+    const textNodes = [];
+    const walk = (n) => {
+      if (n.nodeType === 3) {
+        textNodes.push(n);
+      } else if (n.nodeType === 1) {
+        for (const child of n.childNodes) walk(child);
+      }
+    };
+    walk(el);
+    let remaining = prefix;
+    for (const tn of textNodes) {
+      if (!remaining) break;
+      const str = tn.nodeValue;
+      if (str.startsWith(remaining)) {
+        tn.nodeValue = str.slice(remaining.length).trimStart();
+        remaining = '';
+      } else if (remaining.startsWith(str)) {
+        remaining = remaining.slice(str.length);
+        tn.nodeValue = '';
+      }
+    }
+  }
+
+  /**
+   * Helper to convert a list containing step images into a clean 2-column table
+   */
+  function convertListWithImages(listNode, options, state) {
+    const isOrdered = listNode.tagName.toLowerCase() === 'ol';
+    const startAttr = parseInt(listNode.getAttribute('start'), 10);
+    let listIndex = !isNaN(startAttr) ? startAttr : 1;
+
+    const childNodes = Array.from(listNode.children).filter(
+      c => c.tagName && c.tagName.toLowerCase() === 'li'
+    );
+
+    let rowsHtml = '';
+
+    for (let i = 0; i < childNodes.length; i++) {
+      const li = childNodes[i];
+      const img = li.querySelector('img');
+
+      let imgHtml = '';
+      if (img) {
+        const resolvedSrc = resolveImageSrc(img, img.getAttribute('alt') || `Step ${listIndex}`, options);
+        const altText = (img.getAttribute('alt') || `Step ${listIndex}`).replace(/[\r\n]+/g, ' ').trim();
+        imgHtml = `<img src="${resolvedSrc}" width="140" style="border-radius: 8px; display: block;" alt="${altText}" />`;
+      }
+
+      // Clone li so we can extract text without the img or media wrappers
+      const liClone = li.cloneNode(true);
+      const clonedImgs = liClone.querySelectorAll('img, .ai-exporter-media-card');
+      clonedImgs.forEach(ci => ci.remove());
+
+      // Extract title and text
+      const headingEl = liClone.querySelector('h1, h2, h3, h4, h5, h6, strong, b');
+      let title = '';
+      if (headingEl) {
+        title = headingEl.textContent.trim();
+        headingEl.remove();
+      }
+
+      // If no explicit heading element, check if the text starts with a number or label
+      if (!title) {
+        const rawText = liClone.textContent.trim();
+        const match = rawText.match(/^(\d+[\.\)]\s*[^:\n\.\?]+[:\.\?]?)/);
+        if (match) {
+          title = match[1].trim();
+          removeMatchedPrefix(liClone, match[1]);
+        }
+      }
+
+      // Prefix number if ordered list and title doesn't already have it
+      if (isOrdered) {
+        if (!title) {
+          title = `Step ${listIndex}`;
+        } else if (!/^\d+[\.\)]/i.test(title) && !/^Step\s+\d+/i.test(title)) {
+          title = `${listIndex}. ${title}`;
+        }
+      }
+
+      // Clean remaining text into paragraph tags
+      let bodyHtml = '';
+      const pElements = Array.from(liClone.querySelectorAll('p'));
+      if (pElements.length > 0) {
+        bodyHtml = pElements
+          .map(p => p.innerHTML.trim())
+          .filter(Boolean)
+          .map(p => `<p style="margin: 6px 0 0 0; line-height: 1.5;">${p}</p>`)
+          .join('\n      ');
+      } else {
+        const remaining = liClone.innerHTML.trim();
+        if (remaining) {
+          bodyHtml = `<p style="margin: 6px 0 0 0; line-height: 1.5;">${remaining}</p>`;
+        }
+      }
+
+      const borderStyle = i > 0 ? 'border-top: 1px solid #e5e5e5;' : 'border: none;';
+      const row = `  <tr style="${borderStyle}">
+    <td style="border: none; width: 150px; vertical-align: top; padding: 12px 16px 12px 0;">
+      ${imgHtml}
+    </td>
+    <td style="border: none; vertical-align: top; padding: 12px 0;">
+      ${title ? `<strong style="font-size: 1.05rem;">${title}</strong>` : ''}
+      ${bodyHtml}
+    </td>
+  </tr>`;
+
+      rowsHtml += (rowsHtml ? '\n' : '') + row;
+      listIndex++;
+    }
+
+    return `\n\n<table style="border: none; border-collapse: collapse; width: 100%;">\n${rowsHtml}\n</table>\n\n`;
+  }
+
+  /**
+   * Helper to convert an image node, supporting sidecar image extraction
+   */
+  function convertImageNode(imgNode, altText, options) {
+    altText = altText || imgNode.getAttribute('alt') || 'Image';
+    altText = altText.replace(/[\r\n]+/g, ' ').trim();
+    const src = resolveImageSrc(imgNode, altText, options);
+    if (!src) return '';
     return `![${altText}](${src})`;
   }
 
