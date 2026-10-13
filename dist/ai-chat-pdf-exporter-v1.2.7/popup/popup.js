@@ -123,7 +123,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       try {
         let response;
         let needsInject = false;
-        const currentVersion = (chrome.runtime && chrome.runtime.getManifest && chrome.runtime.getManifest().version) || '1.2.17';
+        const currentVersion = (chrome.runtime && chrome.runtime.getManifest && chrome.runtime.getManifest().version) || '1.2.18';
         console.log(`[AI Exporter Popup] Starting export for ${platform} tab. Target version: v${currentVersion}`);
 
         try {
@@ -171,45 +171,124 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
 
         let ssrHtml = null;
-        if (activeTab.url && activeTab.url.includes('/share/')) {
-          console.log('[AI Exporter Popup] Detected share URL. Pre-fetching SSR HTML with host permissions...');
-          try {
-            const resp = await fetch(activeTab.url);
-            if (resp.ok) {
-              ssrHtml = await resp.text();
-              console.log(`[AI Exporter Popup] Pre-fetched ${ssrHtml.length} bytes of SSR HTML via extension fetch.`);
-            }
-          } catch (e) {
-            console.warn('[AI Exporter Popup] Extension fetch failed:', e);
-          }
+        let preExtractedMessages = null;
 
-          if (!ssrHtml && chrome.scripting && chrome.scripting.executeScript) {
+        if (activeTab.url && activeTab.url.includes('/share/')) {
+          console.log('[AI Exporter Popup] Detected share URL. Attempting direct in-memory React extraction via MAIN world...');
+          if (chrome.scripting && chrome.scripting.executeScript) {
             try {
-              console.log('[AI Exporter Popup] Attempting main-world fetch via chrome.scripting...');
-              const results = await chrome.scripting.executeScript({
+              const memResults = await chrome.scripting.executeScript({
                 target: { tabId: activeTab.id },
                 world: 'MAIN',
-                func: async () => {
+                func: () => {
                   try {
-                    const r = await fetch(window.location.href);
-                    return await r.text();
-                  } catch (e) {
-                    return null;
-                  }
+                    // 1. Check window.__reactRouterContext
+                    const ctx = window.__reactRouterContext;
+                    if (ctx) {
+                      const state = ctx.state || (ctx.router && ctx.router.state);
+                      if (state && state.loaderData) {
+                        for (const k of Object.keys(state.loaderData)) {
+                          const val = state.loaderData[k];
+                          const linear = val && val.serverResponse && val.serverResponse.data && val.serverResponse.data.linear_conversation;
+                          if (Array.isArray(linear) && linear.length > 0) {
+                            return { type: 'linear', linear };
+                          }
+                        }
+                      }
+                    }
+                    // 2. Search React Fiber tree starting from DOM roots
+                    const findLinear = (fiber, d = 0, seen = new Set()) => {
+                      if (!fiber || d > 40 || seen.has(fiber)) return null;
+                      seen.add(fiber);
+                      const scan = (obj, sd = 0) => {
+                        if (!obj || typeof obj !== 'object' || sd > 6) return null;
+                        if (Array.isArray(obj.linear_conversation) && obj.linear_conversation.length > 0) return obj.linear_conversation;
+                        if (obj.serverResponse && Array.isArray(obj.serverResponse.data?.linear_conversation)) return obj.serverResponse.data.linear_conversation;
+                        for (const key of Object.keys(obj)) {
+                          if (key.includes('linear') || key.includes('route') || key.includes('loader') || key.includes('data')) {
+                            const res = scan(obj[key], sd + 1);
+                            if (res) return res;
+                          }
+                        }
+                        return null;
+                      };
+                      if (fiber.memoizedProps) { const r = scan(fiber.memoizedProps); if (r) return r; }
+                      if (fiber.memoizedState) { const r = scan(fiber.memoizedState); if (r) return r; }
+                      if (fiber.child) { const r = findLinear(fiber.child, d + 1, seen); if (r) return r; }
+                      if (fiber.sibling) { const r = findLinear(fiber.sibling, d + 1, seen); if (r) return r; }
+                      return null;
+                    };
+                    const roots = [document.querySelector('#__next'), document.querySelector('#root'), document.body.firstElementChild].filter(Boolean);
+                    for (const r of roots) {
+                      const fk = Object.keys(r).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
+                      if (fk && r[fk]) {
+                        const linear = findLinear(r[fk]);
+                        if (linear && Array.isArray(linear) && linear.length > 0) {
+                          return { type: 'linear', linear };
+                        }
+                      }
+                    }
+                  } catch (e) {}
+                  return null;
                 }
               });
-              if (results && results[0] && results[0].result) {
-                ssrHtml = results[0].result;
-                console.log(`[AI Exporter Popup] Main-world fetch succeeded (${ssrHtml.length} bytes).`);
+
+              if (memResults && memResults[0] && memResults[0].result && memResults[0].result.linear) {
+                const linear = memResults[0].result.linear;
+                console.log(`[AI Exporter Popup] Successfully extracted ${linear.length} linear items from React memory!`);
+                const turns = [];
+                for (const item of linear) {
+                  if (item && item.message) {
+                    const m = item.message;
+                    const role = (m.author && m.author.role === 'user') ? 'user' : 'assistant';
+                    let text = '';
+                    if (m.content && Array.isArray(m.content.parts)) {
+                      text = m.content.parts.filter(p => typeof p === 'string').join('\n\n');
+                    } else if (m.content && typeof m.content.text === 'string') {
+                      text = m.content.text;
+                    }
+                    if (text.trim().length > 0) {
+                      turns.push({
+                        role,
+                        html: role === 'assistant' ? `<div class="markdown" data-raw-markdown="true">${text}</div>` : `<div class="whitespace-pre-wrap">${text}</div>`,
+                        components: {
+                          tablesCount: (text.match(/\|[\s\S]*?\|/g) || []).length,
+                          codeBlocksCount: (text.match(/```[\s\S]*?```/g) || []).length,
+                          chartsCount: 0,
+                          imagesCount: 0,
+                          surveysCount: 0,
+                          textLength: text.length
+                        }
+                      });
+                    }
+                  }
+                }
+                if (turns.length > 0) {
+                  preExtractedMessages = turns;
+                  console.log(`[AI Exporter Popup] Formatted ${turns.length} turns directly from in-memory conversation.`);
+                }
               }
             } catch (e) {
-              console.warn('[AI Exporter Popup] Main-world script execution failed:', e);
+              console.warn('[AI Exporter Popup] Main-world memory extraction failed:', e);
+            }
+          }
+
+          if (!preExtractedMessages) {
+            console.log('[AI Exporter Popup] In-memory extraction did not yield turns. Pre-fetching SSR HTML with host permissions...');
+            try {
+              const resp = await fetch(activeTab.url);
+              if (resp.ok) {
+                ssrHtml = await resp.text();
+                console.log(`[AI Exporter Popup] Pre-fetched ${ssrHtml.length} bytes of SSR HTML via extension fetch.`);
+              }
+            } catch (e) {
+              console.warn('[AI Exporter Popup] Extension fetch failed:', e);
             }
           }
         }
 
         console.log('[AI Exporter Popup] Sending export_chat command to content script...');
-        response = await chrome.tabs.sendMessage(activeTab.id, { action: 'export_chat', platform, ssrHtml });
+        response = await chrome.tabs.sendMessage(activeTab.id, { action: 'export_chat', platform, ssrHtml, preExtractedMessages });
         console.log('[AI Exporter Popup] export_chat response received:', { success: response && response.success, count: response && response.messages ? response.messages.length : 0 });
 
         if (response && response.success) {

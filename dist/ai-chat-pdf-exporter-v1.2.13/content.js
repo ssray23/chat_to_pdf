@@ -1,4 +1,4 @@
-const CONTENT_SCRIPT_VERSION = '1.2.17';
+const CONTENT_SCRIPT_VERSION = '1.2.18';
 if (typeof window !== 'undefined') {
   window.__AI_EXPORTER_VERSION__ = CONTENT_SCRIPT_VERSION;
 }
@@ -41,7 +41,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     (async () => {
       try {
         Logger.stage1(`Initiating 3-stage gated chat export for platform: ${message.platform}`);
-        const messages = await getChatMessages(message.platform, message.ssrHtml);
+        const messages = await getChatMessages(message.platform, message.ssrHtml, message.preExtractedMessages);
         const mathStylesheets = getPageStylesheets();
         Logger.stage2(`Successfully extracted and verified ${messages.length} conversation turns.`);
         sendResponse({ success: true, messages, mathStylesheets, version: CONTENT_SCRIPT_VERSION });
@@ -479,7 +479,8 @@ function cleanNoise(clone) {
 
     const text = el.textContent.trim();
     const isFeedbackOrDebug = /good response|bad response|debug response|provide feedback|give feedback|was this helpful|rate response|report response|thumbs up|thumbs down/i.test(text);
-    const isActionControl = isFeedbackOrDebug || /^(copy|share|retry|thumbs|good|bad|submit|add|cancel|edit|auto|\+\d+|\+add|\d{1,4})$/i.test(text);
+    const isReasoningButton = /^(thought|worked) for (\d+s|a few seconds)$/i.test(text) || /^thinking(\.\.\.)?$/i.test(text);
+    const isActionControl = isFeedbackOrDebug || isReasoningButton || /^(copy|share|retry|thumbs|good|bad|submit|add|cancel|edit|auto|\+\d+|\+add|\d{1,4})$/i.test(text);
 
     const isSourcesPill = !isFeedbackOrDebug && (
       (el.matches && el.matches('[data-testid*="source" i], [class*="source" i], [data-testid*="reference" i]')) || 
@@ -560,16 +561,10 @@ function cleanNoise(clone) {
     '[aria-label*="Read aloud" i]',
     '[aria-label*="Good response" i]',
     '[aria-label*="Bad response" i]',
-    // Claude Actions & Thinking Collapsibles
+    // Claude Actions & Feedback Controls
     '.chat-actions',
     '[class*="thumbs-down"]',
     '[class*="copy-button"]',
-    '[data-testid*="thinking" i]',
-    '[data-testid*="thought" i]',
-    '[class*="thinking" i]',
-    '[class*="thought" i]',
-    '[class*="Thinking" i]',
-    '[class*="Thought" i]',
     // Perplexity
     '.query-actions',
     '.answer-actions',
@@ -712,11 +707,17 @@ function cleanNoise(clone) {
   });
 
   // Remove Claude & ChatGPT "Thought for Xs" / "Worked for Xs" / reasoning collapsible blocks
-  clone.querySelectorAll('button, div, summary, p, span').forEach(el => {
+  // CRITICAL: Never remove parent containers or elements that contain substantive response content (.markdown, paragraphs in response, tables, code)
+  clone.querySelectorAll('button, summary, [class*="thought" i], [class*="thinking" i], [data-testid*="thought" i], [data-testid*="thinking" i], [data-testid*="reasoning" i]').forEach(el => {
+    if (el.querySelector('.markdown, pre, table, .response-content, [class*="response" i]')) return;
     const text = el.textContent.trim();
-    if (/^(thought|worked) for (\d+s|a few seconds)/i.test(text) || /^thinking(\.\.\.)?$/i.test(text)) {
-      const details = el.closest('details') || el;
-      details.remove();
+    if (text.length < 120 && (/^(thought|worked) for (\d+s|a few seconds)$/i.test(text) || /^thinking(\.\.\.)?$/i.test(text))) {
+      const parentBlock = el.closest('details, [data-testid*="thinking" i], [class*="thinking" i], [class*="thought" i]');
+      if (parentBlock && !parentBlock.querySelector('.markdown, pre, table, .response-content, [class*="response" i]')) {
+        parentBlock.remove();
+      } else {
+        el.remove();
+      }
     }
   });
 
@@ -1527,13 +1528,18 @@ async function extractChatGPTShareSSR(root = document) {
 function extractChatGPTShareDOM(root = document) {
   const extracted = [];
 
-  // 1. Try explicit author role elements first
-  const explicitMessages = root.querySelectorAll('[data-message-author-role="user"], [data-message-author-role="assistant"]');
-  if (explicitMessages.length > 0) {
+  // 1. Try explicit author role elements first (only accept if assistant responses are also present)
+  const explicitMessages = Array.from(root.querySelectorAll('[data-message-author-role="user"], [data-message-author-role="assistant"], [data-message-author-role="model"], [data-message-author-role="agent"]'));
+  const hasAsstInShare = explicitMessages.some(el => {
+    const r = (el.getAttribute('data-message-author-role') || '').toLowerCase();
+    return r === 'assistant' || r === 'model' || r === 'agent';
+  });
+  if (explicitMessages.length > 0 && hasAsstInShare) {
     const unique = getUniqueElements(explicitMessages);
     for (let i = 0; i < unique.length; i++) {
       const node = unique[i];
-      const role = (node.getAttribute('data-message-author-role') || '').toLowerCase() === 'user' ? 'user' : 'assistant';
+      const r = (node.getAttribute('data-message-author-role') || '').toLowerCase();
+      const role = (r === 'user' || r === 'human') ? 'user' : 'assistant';
       extracted.push({ role, contentEl: node });
     }
     if (extracted.length > 0) return extracted;
@@ -1616,21 +1622,26 @@ async function extractChatGPTLiveMessages(root = document) {
     return false;
   };
 
-  // 1. Explicit author role elements
-  const explicit = Array.from(root.querySelectorAll('[data-message-author-role="user"], [data-message-author-role="assistant"]'))
+  // 1. Explicit author role elements (only accept if assistant responses are also present)
+  const explicit = Array.from(root.querySelectorAll('[data-message-author-role="user"], [data-message-author-role="assistant"], [data-message-author-role="model"], [data-message-author-role="agent"]'))
     .filter(el => !isInsideComposerOrNav(el))
     .filter(el => {
       if (el.getAttribute('aria-hidden') === 'true' || (el.closest && el.closest('[aria-hidden="true"]'))) return false;
       if (el.classList && (el.classList.contains('sr-only') || el.classList.contains('invisible'))) return false;
       return true;
     });
-  if (explicit.length > 0) {
+  const hasAsstExplicit = explicit.some(el => {
+    const r = (el.getAttribute('data-message-author-role') || '').toLowerCase();
+    return r === 'assistant' || r === 'model' || r === 'agent';
+  });
+  if (explicit.length > 0 && hasAsstExplicit) {
     const uniqueExplicit = getUniqueElements(explicit);
     Logger.stage2(`Matched ${uniqueExplicit.length} explicit author-role ChatGPT turns.`);
-    return uniqueExplicit.map(el => ({
-      role: (el.getAttribute('data-message-author-role') || '').toLowerCase(),
-      contentEl: el
-    }));
+    return uniqueExplicit.map(el => {
+      const r = (el.getAttribute('data-message-author-role') || '').toLowerCase();
+      const role = (r === 'user' || r === 'human') ? 'user' : 'assistant';
+      return { role, contentEl: el };
+    });
   }
 
   // 2. Conversation turn cards / containers
@@ -1644,17 +1655,21 @@ async function extractChatGPTLiveMessages(root = document) {
     for (let i = 0; i < uniqueTurns.length; i++) {
       const art = uniqueTurns[i];
       const userSub = art.querySelector('[data-message-author-role="user"], .font-user-message, div[class*="user-message" i], div[class*="user_message" i], .whitespace-pre-wrap');
-      const asstSub = art.querySelector('[data-message-author-role="assistant"], .markdown, div[class*="markdown" i], [class*="agent-turn" i], .prose');
+      const asstSub = art.querySelector('[data-message-author-role="assistant"], [data-message-author-role="model"], .markdown, div[class*="markdown" i], [class*="agent-turn" i], .prose');
       if (userSub && asstSub && userSub !== asstSub && !asstSub.contains(userSub) && !userSub.contains(asstSub)) {
         extracted.push({ role: 'user', contentEl: userSub });
         extracted.push({ role: 'assistant', contentEl: asstSub });
+      } else if (asstSub) {
+        extracted.push({ role: 'assistant', contentEl: asstSub });
+      } else if (userSub) {
+        extracted.push({ role: 'user', contentEl: userSub });
       } else {
         const role = classifyTurnRole(art, i, uniqueTurns.length);
         const contentEl = (role === 'assistant' ? (asstSub || art) : (userSub || art));
         extracted.push({ role, contentEl });
       }
     }
-    if (extracted.length > 0) return extracted;
+    if (extracted.length > 0 && extracted.some(t => t.role === 'assistant')) return extracted;
   }
 
   // 3. Fallback: Direct Content Block Walker inside main
@@ -2130,6 +2145,10 @@ class ChatMountEngine {
           totalTraversed = curr;
           stepCount++;
 
+          if (typeof this.options.onStep === 'function') {
+            try { await this.options.onStep({ curr, maxScroll, stepCount }); } catch (e) {}
+          }
+
           scrollHeight = isDoc ? (document.documentElement ? document.documentElement.scrollHeight : 0) : innerScroller.scrollHeight;
           maxScroll = Math.max(0, scrollHeight - clientHeight);
           if (curr >= maxScroll) break;
@@ -2580,7 +2599,11 @@ class ChatInventoryEngine {
       return { passed: false, reason: 'No conversation turns were found in the DOM.' };
     }
     // Prevent prompt-only or reasoning-stub-only incomplete export
-    const isReasoningStub = (text) => /^(thought|worked) for (\d+s|a few seconds)/i.test(text) || /^thinking(\.\.\.)?$/i.test(text);
+    // Real assistant responses (hundreds or thousands of characters) must never be flagged as stubs
+    const isReasoningStub = (text) => text.trim().length < 120 && (
+      /^(thought|worked) for (\d+s|a few seconds)$/i.test(text.trim()) ||
+      /^thinking(\.\.\.)?$/i.test(text.trim())
+    );
     const substantiveAsstCount = inventory.filter(t => {
       if (t.role !== 'assistant') return false;
       const text = (t.clone ? t.clone.textContent : (t.contentEl ? t.contentEl.textContent : '')).trim();
@@ -2597,9 +2620,23 @@ class ChatInventoryEngine {
 }
 
 // Scrape chat messages by platform through the unified gated pipeline
-async function getChatMessages(platform, ssrHtml = null) {
+async function getChatMessages(platform, ssrHtml = null, preExtractedMessages = null) {
   Logger.stage1(`Starting getChatMessages for platform: ${platform}`);
   const inventoryEngine = new ChatInventoryEngine();
+
+  // IN-MEMORY PRE-EMPTION PATH (Direct linear conversation extracted from React memory):
+  if (preExtractedMessages && Array.isArray(preExtractedMessages) && preExtractedMessages.length > 0) {
+    try {
+      Logger.stage1(`Processing ${preExtractedMessages.length} in-memory pre-extracted turns from extension...`);
+      const substantiveAsst = preExtractedMessages.filter(t => t.role === 'assistant' && (t.html || '').length > 20).length;
+      if (substantiveAsst > 0) {
+        Logger.stage1(`Successfully validated ${preExtractedMessages.length} turns from React memory.`);
+        return preExtractedMessages;
+      }
+    } catch (e) {
+      Logger.warn(`Failed to process in-memory pre-extracted turns (${e.message}). Falling back to SSR/DOM...`);
+    }
+  }
 
   // SSR PRE-EMPTION PATH (for ChatGPT /share/ pages where DOM is virtualized or scripts stripped by React):
   if (ssrHtml) {
@@ -2643,11 +2680,61 @@ async function getChatMessages(platform, ssrHtml = null) {
     Logger.stage1(`Immediate inspection did not find complete turns (${e.message}). Proceeding to dynamic mount sweep...`);
   }
 
-  // SWEEP PATH (Lazy/virtualized chats like Gemini):
-  const mountEngine = new ChatMountEngine({ skipRestore: true });
+  // SWEEP PATH (Lazy/virtualized chats like Gemini, ChatGPT long chats):
+  // Accumulate turns incrementally at each scroll step to prevent loss from virtualized unmounting!
+  const accumulatedTurnsMap = new Map();
+  const harvestSnapshot = async () => {
+    try {
+      let snapshotTurns = [];
+      if (platform === 'ChatGPT' || (typeof window !== 'undefined' && window.location && window.location.href.includes('chatgpt.com'))) {
+        snapshotTurns = await extractChatGPTLiveMessages(document);
+      } else if (platform === 'Gemini' || (typeof window !== 'undefined' && window.location && window.location.href.includes('gemini.google'))) {
+        snapshotTurns = extractGeminiLiveMessages(document);
+      }
+      for (const t of snapshotTurns) {
+        if (!t.contentEl) continue;
+        const txt = t.contentEl.textContent.trim().slice(0, 100);
+        const key = `${t.role}:${txt}`;
+        if (!accumulatedTurnsMap.has(key)) {
+          accumulatedTurnsMap.set(key, t);
+        }
+      }
+    } catch (e) {}
+  };
+
+  // Initial harvest at current scroll position
+  await harvestSnapshot();
+
+  const mountEngine = new ChatMountEngine({
+    skipRestore: true,
+    onStep: harvestSnapshot
+  });
   const mountResult = await mountEngine.sweep();
 
+  // Final harvest after sweep
+  await harvestSnapshot();
+
   try {
+    // If accumulated turns during sweep gathered both questions and answers, use them!
+    const accumulatedList = Array.from(accumulatedTurnsMap.values());
+    const hasAsstInAccumulated = accumulatedList.some(t => t.role === 'assistant');
+    const hasUserInAccumulated = accumulatedList.some(t => t.role === 'user');
+
+    if (accumulatedList.length > 0 && hasAsstInAccumulated && hasUserInAccumulated) {
+      Logger.stage2(`Using ${accumulatedList.length} turns accumulated during dynamic mount sweep.`);
+      const url = typeof window !== 'undefined' && window.location ? window.location.href : '';
+      const rebuilt = await inventoryEngine.buildInventory(accumulatedList, platform, url);
+      const gate2 = inventoryEngine.verifyGate2(rebuilt.inventory, rebuilt.stats);
+      if (gate2.passed) {
+        Logger.stage3(`Accumulated sweep inventory verified. Preparing ${rebuilt.inventory.length} turns for Markdown converter.`);
+        return rebuilt.inventory.map(t => ({
+          role: t.role,
+          html: t.html,
+          components: t.components
+        }));
+      }
+    }
+
     const inventoryResult = await inventoryEngine.inspect(platform);
     Logger.stage3(`Inventory verified. Preparing ${inventoryResult.turns.length} turns for Markdown converter.`);
     return inventoryResult.turns.map(t => ({

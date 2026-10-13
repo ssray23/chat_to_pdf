@@ -645,6 +645,99 @@ describe('Content Script Scraper & DOM Manipulation Regression Suite', () => {
     // Must NOT contain the stub reasoning button
     expect(messages[1].html).not.toContain('Worked for 20s');
   });
+
+  test('cleanNoise strips Worked for Xs button without stripping response content or parent div', () => {
+    const container = document.createElement('div');
+    container.innerHTML = `
+      <div class="turn-container">
+        <button>Worked for 20s</button>
+        <div class="markdown">
+          <p>Here is the detailed analysis on espresso and fat loss.</p>
+          <table><tr><td>Metric</td><td>Value</td></tr></table>
+        </div>
+      </div>
+    `;
+
+    window.cleanNoise(container);
+    expect(container.textContent).not.toContain('Worked for 20s');
+    expect(container.textContent).toContain('Here is the detailed analysis on espresso and fat loss.');
+    expect(container.querySelector('table')).not.toBeNull();
+  });
+
+  test('getChatMessages extracts turns from DOM when assistant turns lack data-message-author-role and use Worked for Xs with .markdown', async () => {
+    // DOM has 3 user questions with data-message-author-role="user", but assistant turns do NOT have data-message-author-role="assistant"
+    document.body.innerHTML = `
+      <main>
+        <article>
+          <div data-message-author-role="user" class="whitespace-pre-wrap">Question 1: Does espresso impair fat oxidation?</div>
+        </article>
+        <article>
+          <button>Worked for 51s</button>
+          <div class="markdown">
+            <p>Answer 1: No, caffeine stimulates lipolysis by antagonizing adenosine receptors.</p>
+          </div>
+        </article>
+        <article>
+          <div data-message-author-role="user" class="whitespace-pre-wrap">Question 2: What about cortisol spikes?</div>
+        </article>
+        <article>
+          <button>Worked for 9s</button>
+          <div class="markdown">
+            <p>Answer 2: Acute cortisol elevations from caffeine are transient and do not cause visceral adiposity.</p>
+          </div>
+        </article>
+        <article>
+          <div data-message-author-role="user" class="whitespace-pre-wrap">Question 3: Timing recommendations?</div>
+        </article>
+        <article>
+          <button>Worked for 20s</button>
+          <div class="markdown">
+            <p>Answer 3: Consume 30 to 60 minutes prior to exercise.</p>
+          </div>
+        </article>
+      </main>
+    `;
+
+    delete window.location;
+    window.location = new URL('https://chatgpt.com/share/6ace9ec8-6ce0-83eb-886a-3e32e61f5e46');
+    window.fetch = jest.fn().mockRejectedValue(new Error('CORS blocked'));
+
+    const messages = await window.getChatMessages('ChatGPT');
+    expect(messages.length).toBe(6);
+    expect(messages[0].role).toBe('user');
+    expect(messages[0].html).toContain('Does espresso impair fat oxidation?');
+    expect(messages[1].role).toBe('assistant');
+    expect(messages[1].html).toContain('caffeine stimulates lipolysis');
+    expect(messages[1].html).not.toContain('Worked for 51s');
+
+    expect(messages[2].role).toBe('user');
+    expect(messages[3].role).toBe('assistant');
+    expect(messages[3].html).toContain('Acute cortisol elevations');
+    expect(messages[3].html).not.toContain('Worked for 9s');
+
+    expect(messages[4].role).toBe('user');
+    expect(messages[5].role).toBe('assistant');
+    expect(messages[5].html).toContain('Consume 30 to 60 minutes prior');
+    expect(messages[5].html).not.toContain('Worked for 20s');
+  });
+
+  test('getChatMessages directly validates and accepts preExtractedMessages from in-memory extraction', async () => {
+    const preExtracted = [
+      {
+        role: 'user',
+        html: '<div class="whitespace-pre-wrap">User Question</div>',
+        components: { tablesCount: 0, codeBlocksCount: 0, chartsCount: 0, imagesCount: 0, surveysCount: 0, textLength: 13 }
+      },
+      {
+        role: 'assistant',
+        html: '<div class="markdown">Substantive assistant answer with detailed facts and citations.</div>',
+        components: { tablesCount: 0, codeBlocksCount: 0, chartsCount: 0, imagesCount: 0, surveysCount: 0, textLength: 68 }
+      }
+    ];
+
+    const messages = await window.getChatMessages('ChatGPT', null, preExtracted);
+    expect(messages).toEqual(preExtracted);
+  });
 });
 
 
