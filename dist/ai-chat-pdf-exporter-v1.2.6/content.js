@@ -1,4 +1,4 @@
-const CONTENT_SCRIPT_VERSION = '1.2.14';
+const CONTENT_SCRIPT_VERSION = '1.2.15';
 if (typeof window !== 'undefined') {
   window.__AI_EXPORTER_VERSION__ = CONTENT_SCRIPT_VERSION;
 }
@@ -1339,59 +1339,10 @@ function classifyTurnRole(el, index = 0, totalTurns = 1) {
   return index % 2 === 0 ? 'user' : 'assistant';
 }
 
-// Extract ChatGPT /share/ public page content (DOM and SSR JSON/Turbo-Stream payload fallback)
-function extractChatGPTShareMessages() {
+// Extract ChatGPT /share/ public page content via embedded SSR JSON / Remix Turbo-Stream state
+function extractChatGPTShareSSR(root = document) {
   const extracted = [];
-  
-  // 1. Try explicit author role elements first
-  const explicitMessages = document.querySelectorAll('[data-message-author-role="user"], [data-message-author-role="assistant"]');
-  if (explicitMessages.length > 0) {
-    const unique = getUniqueElements(explicitMessages);
-    for (let i = 0; i < unique.length; i++) {
-      const node = unique[i];
-      const role = (node.getAttribute('data-message-author-role') || '').toLowerCase() === 'user' ? 'user' : 'assistant';
-      extracted.push({ role, contentEl: node });
-    }
-    if (extracted.length > 0) return extracted;
-  }
-
-  // 2. Try DOM elements with [data-message-id] or articles and split compound turns
-  const messageNodes = document.querySelectorAll('[data-message-id], [data-testid*="conversation-turn"], [data-testid*="message"], article');
-  if (messageNodes.length > 0) {
-    const unique = getUniqueElements(messageNodes);
-    for (let i = 0; i < unique.length; i++) {
-      const node = unique[i];
-      const userEl = node.querySelector('[data-message-author-role="user"]') || node.querySelector('.font-user-message, div[class*="user-message" i], div[class*="user_message" i]');
-      const asstEl = node.querySelector('[data-message-author-role="assistant"]') || node.querySelector('.markdown, div[class*="markdown" i], [class*="agent-turn" i]');
-      if (userEl && asstEl && userEl !== asstEl) {
-        extracted.push({ role: 'user', contentEl: userEl });
-        extracted.push({ role: 'assistant', contentEl: asstEl });
-      } else {
-        const role = classifyTurnRole(node, i, unique.length);
-        const contentEl = asstEl || userEl || 
-                          node.querySelector('[data-message-author-role]') || 
-                          node.querySelector('.whitespace-pre-wrap') || 
-                          node;
-        extracted.push({ role, contentEl });
-      }
-    }
-    if (extracted.length > 0) return extracted;
-  }
-
-  // 3. Try querying .markdown containers and matching with prompt elements
-  const allBlocks = getUniqueElements(document.querySelectorAll('h1, h2, h3, .whitespace-pre-wrap, .markdown, div[class*="markdown" i]'));
-  if (allBlocks.length > 0) {
-    for (let i = 0; i < allBlocks.length; i++) {
-      const el = allBlocks[i];
-      const role = classifyTurnRole(el, i, allBlocks.length);
-      extracted.push({ role, contentEl: el });
-    }
-    if (extracted.length > 0) return extracted;
-  }
-
-  // 4. Fallback: Parse embedded JSON / Remix Turbo-Stream state
   try {
-    // (A) Check React Router / Remix streamController.enqueue or window.__reactRouterContext
     const decodeTurbo = (turbo, index, seen = new Map()) => {
       if (seen.has(index)) return seen.get(index);
       const raw = turbo[index];
@@ -1438,55 +1389,50 @@ function extractChatGPTShareMessages() {
     };
 
     const foundMessages = [];
-    const visited = new Set();
     const seenIds = new Set();
-    let currentTurbo = null;
 
-    const traverse = (obj) => {
-      if (!obj || typeof obj !== 'object' || visited.has(obj)) return;
-      visited.add(obj);
+    const addMessage = (target, currentTurbo = null) => {
+      if (!target || !target.content || !target.author) return;
+      const rawParts = target.content.parts || [];
+      const parts = Array.isArray(rawParts) ? rawParts : [rawParts];
+      const text = parts.map(p => (typeof p === 'number' && currentTurbo && currentTurbo[p]) ? currentTurbo[p] : p)
+                        .filter(p => typeof p === 'string')
+                        .join('\n').trim();
+      const role = target.author.role === 'user' ? 'user' : (target.author.role === 'assistant' ? 'assistant' : null);
+      const dedupeKey = target.id || (role + '|' + text);
 
-      const target = (obj && obj.message && typeof obj.message === 'object') ? obj.message : obj;
-      if (obj && obj.message && typeof obj.message === 'object') {
-        visited.add(obj.message);
-      }
-
-      if (target && target.content && target.author) {
-        const rawParts = target.content.parts || [];
-        const parts = Array.isArray(rawParts) ? rawParts : [rawParts];
-        const text = parts.map(p => (typeof p === 'number' && currentTurbo && currentTurbo[p]) ? currentTurbo[p] : p)
-                          .filter(p => typeof p === 'string')
-                          .join('\n').trim();
-        const role = target.author.role === 'user' ? 'user' : (target.author.role === 'assistant' ? 'assistant' : null);
-        const dedupeKey = target.id || (role + '|' + text);
-
-        if (!seenIds.has(dedupeKey)) {
-          seenIds.add(dedupeKey);
-          if (role) {
-            const meta = target.metadata || {};
-            const isHidden = meta.is_visually_hidden_from_conversation || meta.is_user_system_message;
-            if (text && !isHidden && text !== 'Original custom instructions no longer available') {
-              let attachmentName = '';
-              if (meta.attachments && meta.attachments.length > 0 && meta.attachments[0].name) {
-                attachmentName = meta.attachments[0].name;
-              }
-              foundMessages.push({ role, text, attachmentName });
-            }
+      if (role && !seenIds.has(dedupeKey)) {
+        seenIds.add(dedupeKey);
+        const meta = target.metadata || {};
+        const isHidden = meta.is_visually_hidden_from_conversation || meta.is_user_system_message;
+        if (text && !isHidden && text !== 'Original custom instructions no longer available') {
+          let attachmentName = '';
+          if (meta.attachments && meta.attachments.length > 0 && meta.attachments[0].name) {
+            attachmentName = meta.attachments[0].name;
           }
+          foundMessages.push({ role, text, attachmentName });
         }
       }
+    };
 
+    const traverse = (obj, currentTurbo = null) => {
+      if (!obj || typeof obj !== 'object') return;
+      if (obj.message && typeof obj.message === 'object') {
+        addMessage(obj.message, currentTurbo);
+      } else {
+        addMessage(obj, currentTurbo);
+      }
       if (Array.isArray(obj)) {
-        for (const item of obj) traverse(item);
+        for (const item of obj) traverse(item, currentTurbo);
       } else {
         for (const key of Object.keys(obj)) {
-          traverse(obj[key]);
+          traverse(obj[key], currentTurbo);
         }
       }
     };
 
     // First try scripts with streamController.enqueue
-    const scripts = Array.from(document.querySelectorAll('script'));
+    const scripts = Array.from(root.querySelectorAll('script'));
     for (const script of scripts) {
       const text = script.textContent || '';
       if (text.includes('streamController.enqueue')) {
@@ -1495,10 +1441,20 @@ function extractChatGPTShareMessages() {
         if (match) {
           const rawArg = match[1].trim().replace(/\);?\s*$/, '');
           try {
-            const turbo = JSON.parse(JSON.parse(rawArg));
-            currentTurbo = turbo;
-            const root = decodeTurbo(turbo, 0);
-            traverse(root);
+            const parsedOnce = JSON.parse(rawArg);
+            const turbo = typeof parsedOnce === 'string' ? JSON.parse(parsedOnce) : parsedOnce;
+            if (Array.isArray(turbo)) {
+              const decoded = decodeTurbo(turbo, 0);
+              const shareRoute = decoded && decoded.loaderData ? decoded.loaderData['routes/share.$shareId.($action)'] : null;
+              const sr = shareRoute && shareRoute.serverResponse ? shareRoute.serverResponse : null;
+              if (sr && sr.data && Array.isArray(sr.data.linear_conversation)) {
+                for (const item of sr.data.linear_conversation) {
+                  if (item && item.message) addMessage(item.message, turbo);
+                }
+              } else {
+                traverse(decoded, turbo);
+              }
+            }
           } catch (e) {}
         }
       }
@@ -1506,41 +1462,119 @@ function extractChatGPTShareMessages() {
 
     // Next try standard JSON script tags (__NEXT_DATA__, client-bootstrap)
     if (foundMessages.length === 0) {
-      const jsonScripts = document.querySelectorAll('script[type="application/json"], script#__NEXT_DATA__, script#client-bootstrap');
+      const jsonScripts = root.querySelectorAll('script[type="application/json"], script#__NEXT_DATA__, script#client-bootstrap');
       for (const script of jsonScripts) {
         const raw = script.textContent.trim();
         if (!raw || (!raw.includes('mapping') && !raw.includes('linear_conversation') && !raw.includes('message') && !raw.includes('title'))) continue;
         try {
           const data = JSON.parse(raw);
-          traverse(data);
+          if (data && data.props && data.props.pageProps && data.props.pageProps.serverResponse && Array.isArray(data.props.pageProps.serverResponse.data?.linear_conversation)) {
+            for (const item of data.props.pageProps.serverResponse.data.linear_conversation) {
+              if (item && item.message) addMessage(item.message);
+            }
+          } else {
+            traverse(data);
+          }
         } catch (e) {}
       }
     }
 
     if (foundMessages.length > 0) {
       for (const m of foundMessages) {
-        const div = document.createElement('div');
+        const div = root.createElement('div');
         div.setAttribute('data-message-author-role', m.role);
         if (m.attachmentName) {
-          const attachEl = document.createElement('div');
+          const attachEl = root.createElement('div');
           attachEl.className = 'ai-exporter-file-attachment';
           attachEl.setAttribute('data-filename', m.attachmentName);
           attachEl.textContent = m.attachmentName;
           div.appendChild(attachEl);
         }
-        const textEl = document.createElement('div');
+        const textEl = root.createElement('div');
         textEl.className = m.role === 'assistant' ? 'markdown' : 'whitespace-pre-wrap';
         textEl.setAttribute('data-raw-markdown', 'true');
         textEl.textContent = m.text;
         div.appendChild(textEl);
         extracted.push({ role: m.role, contentEl: div });
       }
-      return extracted;
     }
   } catch (e) {
     console.warn('Failed to parse share page JSON/Turbo payload:', e);
   }
+  return extracted;
+}
 
+// Extract ChatGPT /share/ public page content via rendered DOM elements
+function extractChatGPTShareDOM(root = document) {
+  const extracted = [];
+
+  // 1. Try explicit author role elements first
+  const explicitMessages = root.querySelectorAll('[data-message-author-role="user"], [data-message-author-role="assistant"]');
+  if (explicitMessages.length > 0) {
+    const unique = getUniqueElements(explicitMessages);
+    for (let i = 0; i < unique.length; i++) {
+      const node = unique[i];
+      const role = (node.getAttribute('data-message-author-role') || '').toLowerCase() === 'user' ? 'user' : 'assistant';
+      extracted.push({ role, contentEl: node });
+    }
+    if (extracted.length > 0) return extracted;
+  }
+
+  // 2. Try DOM elements with [data-message-id] or articles and split compound turns
+  const messageNodes = root.querySelectorAll('[data-message-id], [data-testid*="conversation-turn"], [data-testid*="message"], article');
+  if (messageNodes.length > 0) {
+    const unique = getUniqueElements(messageNodes);
+    for (let i = 0; i < unique.length; i++) {
+      const node = unique[i];
+      const userEl = node.querySelector('[data-message-author-role="user"]') || node.querySelector('.font-user-message, div[class*="user-message" i], div[class*="user_message" i]');
+      const asstEl = node.querySelector('[data-message-author-role="assistant"]') || node.querySelector('.markdown, div[class*="markdown" i], [class*="agent-turn" i]');
+      if (userEl && asstEl && userEl !== asstEl) {
+        extracted.push({ role: 'user', contentEl: userEl });
+        extracted.push({ role: 'assistant', contentEl: asstEl });
+      } else {
+        const role = classifyTurnRole(node, i, unique.length);
+        const contentEl = asstEl || userEl || 
+                          node.querySelector('[data-message-author-role]') || 
+                          node.querySelector('.whitespace-pre-wrap') || 
+                          node;
+        extracted.push({ role, contentEl });
+      }
+    }
+    if (extracted.length > 0) return extracted;
+  }
+
+  // 3. Try querying .markdown containers and matching with prompt elements
+  const allBlocks = getUniqueElements(root.querySelectorAll('h1, h2, h3, .whitespace-pre-wrap, .markdown, div[class*="markdown" i]'));
+  if (allBlocks.length > 0) {
+    for (let i = 0; i < allBlocks.length; i++) {
+      const el = allBlocks[i];
+      const role = classifyTurnRole(el, i, allBlocks.length);
+      extracted.push({ role, contentEl: el });
+    }
+    if (extracted.length > 0) return extracted;
+  }
+
+  return extracted;
+}
+
+// Extract ChatGPT /share/ public page content (prioritizes complete SSR JSON/Turbo-Stream payload, with DOM fallback)
+function extractChatGPTShareMessages(root = document) {
+  const ssrTurns = extractChatGPTShareSSR(root);
+  const domTurns = extractChatGPTShareDOM(root);
+
+  // If SSR payload provided turns, and contains at least as many turns as the DOM, prefer SSR
+  // because SSR payloads in ChatGPT share pages contain the entire unvirtualized conversation history.
+  if (ssrTurns.length >= domTurns.length && ssrTurns.length > 0) {
+    Logger.stage2(`Using complete SSR payload for ChatGPT share page (${ssrTurns.length} turns).`);
+    return ssrTurns;
+  }
+
+  if (domTurns.length > 0) {
+    Logger.stage2(`Using DOM elements for ChatGPT share page (${domTurns.length} turns).`);
+    return domTurns;
+  }
+
+  return ssrTurns;
 }
 
 // Extract ChatGPT live web application content (robust multi-variant discovery)
@@ -1551,7 +1585,7 @@ function extractChatGPTLiveMessages(root = document) {
 
   // 0. Share page extraction if URL is /share/
   if (isShare) {
-    const shareTurns = extractChatGPTShareMessages();
+    const shareTurns = extractChatGPTShareMessages(root);
     if (shareTurns.length > 0) return shareTurns;
   }
 
@@ -1652,7 +1686,7 @@ function extractChatGPTLiveMessages(root = document) {
 
   // 4. Share page fallback if URL is /share/
   if (isShare) {
-    return extractChatGPTShareMessages();
+    return extractChatGPTShareMessages(root);
   }
 
   return extracted;

@@ -167,17 +167,22 @@
    * Helper to parse HTML string into a DOM element or document
    */
   function parseHTML(html) {
+    let cleanHtml = typeof html === 'string' ? html
+      .replace(/<icon\b[^>]*\/?>/gi, '\n\n• ')
+      .replace(/<Cite\b[^>]*\/?>/gi, '')
+      .replace(/<divider\b[^>]*\/?>/gi, '\n\n') : html;
+
     if (typeof window !== 'undefined' && window.DOMParser) {
       const parser = new window.DOMParser();
-      const doc = parser.parseFromString(html, 'text/html');
+      const doc = parser.parseFromString(cleanHtml, 'text/html');
       return doc.body;
     } else if (typeof document !== 'undefined') {
       const container = document.createElement('div');
-      container.innerHTML = html;
+      container.innerHTML = cleanHtml;
       return container;
     } else {
       // 100% self-contained parser for pure Node.js environments
-      return createLightweightDOM(html);
+      return createLightweightDOM(cleanHtml);
     }
   }
 
@@ -456,6 +461,25 @@
       let fence = '```';
       while (text.includes(fence)) fence += '`';
       return `\n\n${fence}text\n${text}\n${fence}\n\n`;
+    }
+
+    // Raw Markdown Container (e.g. SSR unparsed markdown payload from ChatGPT /share/)
+    if (node.getAttribute && node.getAttribute('data-raw-markdown') === 'true') {
+      return `\n\n${node.textContent.trim()}\n\n`;
+    }
+
+    // Special ChatGPT JSX widget tags inside DOM:
+    if (tagName === 'cite' && (node.hasAttribute('refs') || (node.getAttribute('class') || '').includes('citation'))) {
+      return '';
+    }
+    if (tagName === 'icon') {
+      return '\n\n• ';
+    }
+    if (tagName === 'box' || tagName === 'row') {
+      return `\n\n${convertChildren(node, options, state)}\n\n`;
+    }
+    if (tagName === 'divider') {
+      return '\n\n';
     }
 
     // Special / Preformatted Containers (div with code-block or data-node-type="codeBlock")
@@ -1023,6 +1047,13 @@
 
     // 8b. Clean stray solitary citation numbers or search badges (e.g. solitary "9" between blocks)
     out = out.replace(/(?:\r?\n|^)[ \t]*\d{1,3}[ \t]*(?=\r?\n+(?:#{1,6}\s+|<table|---|<img|<div|\*\*|[A-Z]|$))/g, '');
+
+    // 8c. Clean raw ChatGPT internal JSX widgets and tokens (e.g. <Cite refs={...}/>, <box>, <row>, <icon>)
+    out = out.replace(/<Cite\s+refs=\{[^}]*\}\s*\/>/gi, '');
+    out = out.replace(/<icon\s+name=["\x27]?([^" \x27>]+)["\x27]?[^>]*\/>/gi, '\n\n• ');
+    out = out.replace(/<\/?(?:box|row)[^>]*>/gi, '\n\n');
+    out = out.replace(/<divider[^>]*\/?>/gi, '\n\n');
+    out = out.replace(/(?:^|\n)[ \t]*•[ \t\r\n]+/g, '\n\n• ');
 
     // 9. Clean up multiple newlines before table formatting
     out = out.replace(/\n{3,}/g, '\n\n');

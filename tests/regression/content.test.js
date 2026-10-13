@@ -490,4 +490,83 @@ describe('Content Script Scraper & DOM Manipulation Regression Suite', () => {
     expect(container.textContent).toContain('console.log("Hello");');
     expect(container.querySelector('pre')).not.toBeNull();
   });
+
+  test('getChatMessages extracts complete conversation from streamController.enqueue SSR payload on ChatGPT share pages even if DOM is virtualized', async () => {
+    eval(contentJsCode + `
+      window.getChatMessages = getChatMessages;
+    `);
+
+    // Simulated turbo-stream array containing linear_conversation with 4 turns
+    const linearConversation = [
+      {
+        message: {
+          id: 'turn-1',
+          author: { role: 'user' },
+          content: { parts: ['Question 1: Espresso and Cortisol'] }
+        }
+      },
+      {
+        message: {
+          id: 'turn-2',
+          author: { role: 'assistant' },
+          content: { parts: ['Answer 1: No evidence of visceral fat trap.'] }
+        }
+      },
+      {
+        message: {
+          id: 'turn-3',
+          author: { role: 'user' },
+          content: { parts: ['Question 2: Fasting duration'] }
+        }
+      },
+      {
+        message: {
+          id: 'turn-4',
+          author: { role: 'assistant' },
+          content: { parts: ['Answer 2: 16-hour fasting is fine.'] }
+        }
+      }
+    ];
+
+    // Build mock turbo root
+    const turboArray = [
+      { _1: 2 },
+      'loaderData',
+      { _3: 4 },
+      'routes/share.$shareId.($action)',
+      { _5: 6 },
+      'serverResponse',
+      { _7: 8 },
+      'data',
+      { _9: 10 },
+      'linear_conversation',
+      linearConversation
+    ];
+
+    document.body.innerHTML = `
+      <script>
+        window.__reactRouterContext.streamController.enqueue(${JSON.stringify(JSON.stringify(turboArray))});
+      </script>
+      <main>
+        <!-- Virtualized DOM only has the first turn rendered -->
+        <div data-message-author-role="user">Question 1: Espresso and Cortisol</div>
+      </main>
+    `;
+
+    delete window.location;
+    window.location = new URL('https://chatgpt.com/share/6ace9ec8-6ce0-83eb-886a-3e32e61f5e46');
+
+    const messages = await window.getChatMessages('ChatGPT');
+    // Must capture all 4 turns from SSR payload rather than just the 1 turn in the virtualized DOM
+    expect(messages.length).toBe(4);
+    expect(messages[0].role).toBe('user');
+    expect(messages[0].html).toContain('Question 1: Espresso and Cortisol');
+    expect(messages[1].role).toBe('assistant');
+    expect(messages[1].html).toContain('Answer 1: No evidence of visceral fat trap.');
+    expect(messages[2].role).toBe('user');
+    expect(messages[2].html).toContain('Question 2: Fasting duration');
+    expect(messages[3].role).toBe('assistant');
+    expect(messages[3].html).toContain('Answer 2: 16-hour fasting is fine.');
+  });
 });
+

@@ -704,6 +704,55 @@ What next?
       expect(result.markdown).toContain('<img src="https://example.com/single.jpg" width="340" style="border-radius: 8px; max-width: 100%; display: block; margin: 14px 0;" alt="Tamarind Chicken" />');
       expect(result.markdown).not.toContain('![Tamarind Chicken](https://example.com/single.jpg)');
     });
+
+    test('postProcessMarkdown cleans raw ChatGPT JSX widgets (<box>, <row>, <icon>, <Cite>) into clean Markdown', () => {
+      const chatData = {
+        platform: 'ChatGPT',
+        title: 'Espresso Analysis',
+        messages: [
+          {
+            role: 'user',
+            html: '<div class="whitespace-pre-wrap">Assess my fasting plan</div>'
+          },
+          {
+            role: 'assistant',
+            html: `
+              <div class="markdown">
+                <h2>Provisional assessment</h2>
+                <box border radius="xl" padding={3}>
+                  <row align=start>
+                    <icon name="check-circle" color="success" size="xl"/>
+                    <box flex="1">
+                      **Continue the 16-hour fast**
+                      It is a reasonable way to organise eating. <Cite refs={["turn1search2"]}/>
+                    </box>
+                  </row>
+                  <divider color="subtle"/>
+                  <row align=start>
+                    <icon name="alert-circle" color="warning" size="xl"/>
+                    <box flex="1">
+                      **Verify caffeine dose**
+                    </box>
+                  </row>
+                </box>
+                <h2>What I need next</h2>
+              </div>
+            `
+          }
+        ]
+      };
+
+      const result = convertChatToMarkdown(chatData);
+
+      expect(result.markdown).not.toContain('<Cite');
+      expect(result.markdown).not.toContain('<box');
+      expect(result.markdown).not.toContain('<row');
+      expect(result.markdown).not.toContain('<icon');
+      expect(result.markdown).not.toContain('<divider');
+      expect(result.markdown).toContain('• **Continue the 16-hour fast**');
+      expect(result.markdown).toContain('• **Verify caffeine dose**');
+      expect(result.markdown).toContain('## What I need next');
+    });
   });
 });
 
