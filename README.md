@@ -144,6 +144,17 @@ To guarantee a clean layout when printing or viewing:
     - Normalizes prompt file attachments into clean badge pills (`📎 **filename**`) and ensures proper line separation from prompt text.
 13. **ChatGPT React Router v7 Streaming Hydration Support ([content.js](<./content.js>)):**
     - Decodes streaming turbo-stream chunks from `window.__reactRouterContext.streamController.enqueue` for live and shared ChatGPT conversations.
+14. **Gated DOM Pipeline Architecture & Structural Integrity Validation ([content.js](<./content.js>)):**
+    - Implements a resilient 3-stage gated pipeline:
+      - **Stage 1 (Mount & Sweep)**: Systematically un-virtualizes chat containers with bidirectional sweeps.
+      - **Stage 2 (Inventory & Quality Gates)**: Catalogs conversation turns, validates structural integrity (Gate 1 & Gate 2), and executes self-healing interstitial assistant turn recovery to prevent partial/truncated exports.
+      - **Stage 3 (Markdown Handover)**: Delivers validated, normalized turns to the Markdown conversion engine.
+15. **Google Gemini Live & Shared Chat Export ([content.js](<./content.js>)):**
+    - Extracts pairwise turns from live Gemini web app conversation containers (`.conversation-container`, `<user-query>`, `<model-response>`, `<message-content>`) and public shared links (`<share-turn-viewer>`).
+    - Strips duplicate truncated preview headers (`<h5>`), "Gemini said" badges, draft pickers, and accessibility artifacts while preserving rich tables, diagrams, and formatting.
+16. **Upward Mount Convergence Loop for Virtualized Chats ([content.js](<./content.js>)):**
+    - Detects virtualized chat scrollers (`<infinite-scroller>`, `chat-window`, Angular/CDK scroll containers) and pulses `scrollTop = 0` until all historical earlier turns are fetched and mounted into the DOM.
+    - Eliminates missing start turns in long conversations, guaranteeing complete exports from the initial prompt through to the final response.
 
 ---
 
