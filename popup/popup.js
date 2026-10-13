@@ -76,7 +76,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       platform = 'ChatGPT';
     } else if (url.includes('claude.ai')) {
       platform = 'Claude';
-    } else if (url.includes('gemini.google.com')) {
+    } else if (url.includes('gemini.google.com') || url.includes('share.gemini.google')) {
       platform = 'Gemini';
     } else if (url.includes('perplexity.ai')) {
       platform = 'Perplexity';
@@ -115,17 +115,50 @@ document.addEventListener('DOMContentLoaded', async () => {
       
       try {
         let response;
+        let needsInject = false;
+
         try {
-          response = await chrome.tabs.sendMessage(activeTab.id, { action: 'export_chat', platform });
-        } catch (err) {
-          console.warn('Content script not detected. Injecting content script...', err);
-          await chrome.scripting.executeScript({
-            target: { tabId: activeTab.id },
-            files: ['content.js']
-          });
-          await new Promise(resolve => setTimeout(resolve, 300));
-          response = await chrome.tabs.sendMessage(activeTab.id, { action: 'export_chat', platform });
+          const pingRes = await chrome.tabs.sendMessage(activeTab.id, { action: 'ping' });
+          if (!pingRes || pingRes.version !== '1.2.1') {
+            needsInject = true;
+          }
+        } catch (e) {
+          needsInject = true;
         }
+
+        if (needsInject) {
+          try {
+            console.log('Injecting/refreshing latest content script in tab...');
+            await chrome.scripting.executeScript({
+              target: { tabId: activeTab.id },
+              files: ['content.js']
+            });
+            await new Promise(resolve => setTimeout(resolve, 350));
+            const verifyPing = await chrome.tabs.sendMessage(activeTab.id, { action: 'ping' });
+            if (!verifyPing || verifyPing.version !== '1.2.1') {
+              updateStatus('error', 'Tab Refresh Required', 'Please reload this tab (Cmd+R) so Chrome activates the latest v1.2.1 extension.');
+              btnExportMd.innerHTML = '<span>Reload Tab (Cmd+R)</span>';
+              btnExportMd.disabled = false;
+              btnExportMd.onclick = () => {
+                chrome.tabs.reload(activeTab.id);
+                window.close();
+              };
+              return;
+            }
+          } catch (injectErr) {
+            console.warn('Script injection attempt:', injectErr);
+            updateStatus('error', 'Tab Refresh Required', 'Please reload this tab (Cmd+R) to apply the latest v1.2.1 update.');
+            btnExportMd.innerHTML = '<span>Reload Tab (Cmd+R)</span>';
+            btnExportMd.disabled = false;
+            btnExportMd.onclick = () => {
+              chrome.tabs.reload(activeTab.id);
+              window.close();
+            };
+            return;
+          }
+        }
+
+        response = await chrome.tabs.sendMessage(activeTab.id, { action: 'export_chat', platform });
 
         if (response && response.success) {
           const chatData = {
@@ -142,13 +175,14 @@ document.addEventListener('DOMContentLoaded', async () => {
 
           const result = converter.convertChatToMarkdown(chatData);
           downloadFile(result.markdown, result.filename);
-          updateStatus('detected', 'Export Complete!', 'Markdown file downloaded successfully.');
+          updateStatus('detected', 'Export Complete!', `Downloaded ${response.messages.length} conversation turns as Markdown.`);
         } else {
           updateStatus('error', 'Scrape Failed', (response && response.error) || 'Failed to extract chat content.');
         }
       } catch (err) {
         console.error(err);
-        updateStatus('error', 'Export Error', err.message || 'An error occurred during export.');
+        const isGateError = err.message && err.message.includes('Gate');
+        updateStatus('error', isGateError ? 'Quality Gate Check Failed' : 'Export Error', err.message || 'An error occurred during export.');
       }
     });
   }

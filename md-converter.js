@@ -836,9 +836,19 @@
       .replace(/\\ge(q)?\b/gi, '≥')
       .replace(/\\mathbf\{([^}]+)\}/g, '$1')
       .replace(/\\text\{([^}]+)\}/g, '$1')
+      .replace(/\\alpha\b/gi, 'α')
+      .replace(/\\beta\b/gi, 'β')
+      .replace(/\\gamma\b/gi, 'γ')
+      .replace(/\\delta\b/gi, 'δ')
+      .replace(/\\theta\b/gi, 'θ')
+      .replace(/\\lambda\b/gi, 'λ')
+      .replace(/\\mu\b/gi, 'μ')
+      .replace(/\\pi\b/gi, 'π')
+      .replace(/\\sigma\b/gi, 'σ')
+      .replace(/\\omega\b/gi, 'ω')
       .replace(/\$\s*(\d+\s*×\s*£[0-9,.]+)\s*=\s*(£[0-9,.]+)\s*\$/g, '($1 = $2)')
       .replace(/\$\s*Total\s*=\s*(£[0-9,.]+)\s*\$/g, '(Total = $1)')
-      .replace(/\$\s*([A-Za-z0-9\s\-–+=/£€$]+)\s*\$/g, '$1');
+      .replace(/\$\s*([A-Za-z0-9\s\-–+=/£€$α-ωΑ-Ω]+)\s*\$/g, '$1');
 
     // 2. Fix broken split bold tags around parentheses / code / links:
     // e.g., "**Retire Credit Files (**`CF`**)**" -> "**Retire Credit Files** (`CF`)"
@@ -977,6 +987,18 @@
 
     // Run post-processing on entire document
     doc = postProcessMarkdown(doc) + '\n';
+
+    // GATE 3: Document Quality Gate
+    const userMessageCount = messages.filter(m => m.role === 'user').length;
+    const asstMessageCount = messages.filter(m => m.role === 'assistant').length;
+
+    if (userMessageCount > 1 && asstMessageCount === 0) {
+      throw new Error(`Gate 3 Quality Violation: Document contains ${userMessageCount} user questions but 0 assistant responses. Markdown generation aborted.`);
+    }
+
+    if (!doc.trim() || doc.trim().length < 50) {
+      throw new Error('Gate 3 Quality Violation: Generated Markdown document is empty or below minimum size threshold.');
+    }
 
     const safeFilename = sanitizeFilename(title, '.md');
 

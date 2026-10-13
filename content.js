@@ -1,11 +1,20 @@
+const CONTENT_SCRIPT_VERSION = '1.2.1';
+if (typeof window !== 'undefined') {
+  window.__AI_EXPORTER_VERSION__ = CONTENT_SCRIPT_VERSION;
+}
+
 // Listen for messages from the popup
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.action === 'ping') {
+    sendResponse({ pong: true, version: CONTENT_SCRIPT_VERSION });
+    return true;
+  }
   if (message.action === 'export_chat') {
     (async () => {
       try {
         const messages = await getChatMessages(message.platform);
         const mathStylesheets = getPageStylesheets();
-        sendResponse({ success: true, messages, mathStylesheets });
+        sendResponse({ success: true, messages, mathStylesheets, version: CONTENT_SCRIPT_VERSION });
       } catch (err) {
         console.error('AI Chat PDF Exporter Scrape Error:', err);
         sendResponse({ success: false, error: err.message || 'Scrape failed' });
@@ -20,14 +29,16 @@ const capturedIframes = new WeakMap();
 // Hide fixed and sticky overlays before taking screenshot
 function hideOverlays() {
   const hidden = [];
-  const elements = document.querySelectorAll('header, footer, div, form, fieldset');
+  const elements = document.querySelectorAll('header, footer, nav, aside, form, fieldset, [style*="fixed" i], [style*="sticky" i], [class*="fixed" i], [class*="sticky" i], [class*="overlay" i], [class*="toolbar" i]');
   for (let i = 0; i < elements.length; i++) {
     const el = elements[i];
-    const pos = window.getComputedStyle(el).position;
-    if (pos === 'fixed' || pos === 'sticky') {
-      hidden.push({ el, orig: el.style.visibility });
-      el.style.visibility = 'hidden';
-    }
+    try {
+      const pos = window.getComputedStyle(el).position;
+      if (pos === 'fixed' || pos === 'sticky') {
+        hidden.push({ el, orig: el.style.visibility });
+        el.style.visibility = 'hidden';
+      }
+    } catch (e) {}
   }
   return hidden;
 }
@@ -505,7 +516,8 @@ function cleanNoise(clone) {
     '[class*="sr-only" i]',
     '#aria-notify-live-region-assertive',
     '#aria-notify-live-region-polite',
-    '[aria-live]',
+    '[aria-live][class*="sr-only" i]',
+    '[aria-live].sr-only',
     // ChatGPT Action bars & feedback buttons
     '[data-testid*="action-bar" i]',
     '[data-testid*="copy-turn-action-button" i]',
@@ -752,6 +764,9 @@ function cleanNoise(clone) {
   if (currentUrl.includes('atlassian.net') || currentUrl.includes('atlassian.com')) {
     normalizeSmartLinksAndLists(clone);
   }
+  if (currentUrl.includes('gemini.google')) {
+    normalizeGeminiTurn(clone);
+  }
 }
 
 // Normalize Atlassian Smart Links, Jira issue lozenges, and list item spacing
@@ -943,6 +958,38 @@ function normalizeSmartLinksAndLists(container) {
   }
 }
 
+// Clean internal Gemini preview elements and UI chrome
+function normalizeGeminiTurn(clone, role) {
+  if (!clone) return;
+
+  // 1. Remove Gemini UI action bars, draft pickers, and tool drawers
+  clone.querySelectorAll(
+    '.message-actions, button-row, .action-row, .action-area, [data-testid*="draft" i], ' +
+    '[class*="draft" i], .export-menu, .response-feedback'
+  ).forEach(el => el.remove());
+
+  // 2. On user turns, remove Gemini duplicate internal preview title (<h5>)
+  // Gemini renders an <h5> (often ending in an ellipsis "…") as an internal preview/card header
+  // while the actual prompt body is in a sibling <p> or <div class="query-text">.
+  const isUserTurn = role === 'user' || (clone.tagName && clone.tagName.toLowerCase() === 'user-query') || (clone.querySelector && clone.querySelector('user-query'));
+  if (isUserTurn) {
+    const h5List = Array.from(clone.querySelectorAll('h5, [class*="query-title" i], [class*="query-header" i]'));
+    if (h5List.length > 0) {
+      const allText = clone.textContent.trim();
+      const h5Text = h5List.map(h => h.textContent.trim()).join(' ');
+      if (allText.length > h5Text.length + 5 || clone.querySelector('p, div.query-text, [class*="query-text" i]')) {
+        h5List.forEach(h => h.remove());
+      } else {
+        h5List.forEach(h => {
+          const p = document.createElement('p');
+          p.innerHTML = h.innerHTML;
+          h.replaceWith(p);
+        });
+      }
+    }
+  }
+}
+
 // Helper to filter out nested child elements of the same selector list
 function getUniqueElements(elements) {
   const arr = Array.from(elements);
@@ -1066,10 +1113,14 @@ function isUserTurn(el) {
 
   const tagName = el.tagName ? el.tagName.toLowerCase() : '';
   if (tagName === 'user-query') return true;
-  if (tagName === 'model-response') return false;
+  if (tagName === 'model-response' || tagName === 'message-content') return false;
 
-  const hasAsstChild = el.querySelector && el.querySelector('[data-message-author-role="assistant"], .markdown, div[class*="markdown" i]');
-  const hasUserChild = el.querySelector && el.querySelector('[data-message-author-role="user"]');
+  const hasAsstChild = el.querySelector && el.querySelector(
+    '[data-message-author-role="assistant"], model-response, message-content, [class*="model-response" i], .markdown, div[class*="markdown" i]'
+  );
+  const hasUserChild = el.querySelector && el.querySelector(
+    '[data-message-author-role="user"], user-query, [class*="user-query" i]'
+  );
   // If container has BOTH user and assistant, it is a compound turn (not solely a user turn)
   if (hasAsstChild && hasUserChild) return false;
   if (hasUserChild) return true;
@@ -1082,8 +1133,9 @@ function isUserTurn(el) {
   const testId = (el.getAttribute('data-testid') || '').toLowerCase();
   const className = el.className && typeof el.className === 'string' ? el.className.toLowerCase() : '';
 
-  const isExplicitAssistant = /\b(assistant|agent|model-response|bot-message|rovo-message)\b/i.test(testId) || 
-                              /\b(assistant|agent|claude-message|rovo-assistant)\b/i.test(className);
+  const isExplicitAssistant = /\b(assistant|agent|model-response|message-content|bot-message|rovo-message)\b/i.test(testId) || 
+                              /\b(assistant|agent|claude-message|rovo-assistant)\b/i.test(className) ||
+                              className.includes('model-response-text');
 
   if (!isExplicitAssistant) {
     if (/\b(user|human|query|prompt|sent)\b/i.test(testId) || /\b(user-message|font-user|usermessage|user_message|user-query)\b/i.test(className)) {
@@ -1149,12 +1201,14 @@ function classifyTurnRole(el, index = 0, totalTurns = 1) {
 
   // 3. Assistant semantic signals
   const tagName = el.tagName ? el.tagName.toLowerCase() : '';
-  if (tagName === 'model-response') return 'assistant';
+  if (tagName === 'model-response' || tagName === 'message-content') return 'assistant';
 
   const testId = (el.getAttribute('data-testid') || '').toLowerCase();
   const className = el.className && typeof el.className === 'string' ? el.className.toLowerCase() : '';
 
-  if (/\b(assistant|agent|model-response|bot-message|rovo)\b/i.test(className) || /\b(assistant|agent|model-response|bot-message|rovo)\b/i.test(testId)) {
+  if (/\b(assistant|agent|model-response|message-content|bot-message|rovo)\b/i.test(className) || 
+      /\b(assistant|agent|model-response|message-content|bot-message|rovo)\b/i.test(testId) ||
+      className.includes('model-response-text')) {
     return 'assistant';
   }
 
@@ -1292,17 +1346,22 @@ function extractChatGPTShareMessages() {
       visited.add(obj);
 
       const target = (obj && obj.message && typeof obj.message === 'object') ? obj.message : obj;
+      if (obj && obj.message && typeof obj.message === 'object') {
+        visited.add(obj.message);
+      }
+
       if (target && target.content && target.author) {
-        const msgId = target.id || (obj.id ? obj.id : null);
-        if (!msgId || !seenIds.has(msgId)) {
-          if (msgId) seenIds.add(msgId);
-          const role = target.author.role === 'user' ? 'user' : (target.author.role === 'assistant' ? 'assistant' : null);
+        const rawParts = target.content.parts || [];
+        const parts = Array.isArray(rawParts) ? rawParts : [rawParts];
+        const text = parts.map(p => (typeof p === 'number' && currentTurbo && currentTurbo[p]) ? currentTurbo[p] : p)
+                          .filter(p => typeof p === 'string')
+                          .join('\n').trim();
+        const role = target.author.role === 'user' ? 'user' : (target.author.role === 'assistant' ? 'assistant' : null);
+        const dedupeKey = target.id || (role + '|' + text);
+
+        if (!seenIds.has(dedupeKey)) {
+          seenIds.add(dedupeKey);
           if (role) {
-            const rawParts = target.content.parts || [];
-            const parts = Array.isArray(rawParts) ? rawParts : [rawParts];
-            const text = parts.map(p => (typeof p === 'number' && currentTurbo && currentTurbo[p]) ? currentTurbo[p] : p)
-                              .filter(p => typeof p === 'string')
-                              .join('\n').trim();
             const meta = target.metadata || {};
             const isHidden = meta.is_visually_hidden_from_conversation || meta.is_user_system_message;
             if (text && !isHidden && text !== 'Original custom instructions no longer available') {
@@ -1381,6 +1440,27 @@ function extractChatGPTShareMessages() {
     console.warn('Failed to parse share page JSON/Turbo payload:', e);
   }
 
+}
+
+// Extract Gemini /share/ public page content (DOM pairwise structure)
+function extractGeminiShareMessages(root = document) {
+  const extracted = [];
+  const viewers = root.querySelectorAll('share-turn-viewer');
+  if (viewers.length > 0) {
+    for (let i = 0; i < viewers.length; i++) {
+      const v = viewers[i];
+      const userEl = v.querySelector('user-query');
+      const asstEl = v.querySelector('message-content') || 
+                     v.querySelector('[class*="model-response-text" i]') || 
+                     v.querySelector('.markdown, div[class*="markdown" i]');
+      if (userEl) {
+        extracted.push({ role: 'user', contentEl: userEl });
+      }
+      if (asstEl) {
+        extracted.push({ role: 'assistant', contentEl: asstEl });
+      }
+    }
+  }
   return extracted;
 }
 
@@ -1467,7 +1547,7 @@ function extractAdaptiveTurns(root = document.body) {
 function findChatScrollContainer() {
   // 1. Walk up from any rendered message or document
   const sample = document.querySelector(
-    '.ak-renderer-document, [data-testid*="message" i], [class*="message" i], [class*="bubble" i], [data-testid*="user-message" i]'
+    '.ak-renderer-document, [data-testid*="message" i], [class*="message" i], [class*="bubble" i], [data-testid*="user-message" i], user-query, message-content, model-response'
   );
   if (sample) {
     let p = sample.parentElement;
@@ -1499,186 +1579,178 @@ function findChatScrollContainer() {
   return best || document.scrollingElement || document.documentElement;
 }
 
-// Universal collector for virtualized chat containers: sweeps the container to mount and capture all turns
-async function collectTurns(queryFn, platform) {
-  const scrollContainer = findChatScrollContainer();
-  const isDoc = !scrollContainer || scrollContainer === document.documentElement || scrollContainer === document.body;
-  
-  const initialScrollTop = isDoc ? window.scrollY : (scrollContainer ? scrollContainer.scrollTop : 0);
-  const clientHeight = scrollContainer && !isDoc ? scrollContainer.clientHeight : window.innerHeight;
-
-  const collected = [];
-  const seenFingerprints = new Set();
-
-  function recordVisibleTurns() {
-    const rawTurns = queryFn();
-    const unique = getUniqueElements(rawTurns);
-    for (let i = 0; i < unique.length; i++) {
-      const turn = unique[i];
-
-      // Safety check: if a container holds BOTH user and assistant elements, split them
-      const userSub = turn.querySelector && turn.querySelector('[data-message-author-role="user"]');
-      const asstSub = turn.querySelector && (turn.querySelector('[data-message-author-role="assistant"]') || turn.querySelector('.markdown, div[class*="markdown" i]'));
-      if (userSub && asstSub && userSub !== asstSub) {
-        for (const sub of [userSub, asstSub]) {
-          const text = sub.textContent.trim();
-          const hasMedia = sub.querySelector('img, canvas, svg, iframe, table');
-          if (!text && !hasMedia) continue;
-          const role = classifyTurnRole(sub, collected.length, unique.length);
-          const fp = role + '|' + text.slice(0, 100) + '|' + text.slice(-50) + '|' + text.length;
-          if (seenFingerprints.has(fp)) continue;
-          seenFingerprints.add(fp);
-          const clone = deepCloneWithShadowsAndSvgs(sub);
-          collected.push({ role, clone, contentEl: sub });
-        }
-        continue;
-      }
-
-      const text = turn.textContent.trim();
-      const hasMedia = turn.querySelector('img, canvas, svg, iframe, table');
-      if (!text && !hasMedia) continue;
-
-      const role = classifyTurnRole(turn, i, unique.length);
-      // Stable fingerprint
-      const fp = role + '|' + text.slice(0, 100) + '|' + text.slice(-50) + '|' + text.length;
-      if (seenFingerprints.has(fp)) continue;
-
-      seenFingerprints.add(fp);
-      // Clone immediately into memory so virtualization never loses offscreen content
-      const clone = deepCloneWithShadowsAndSvgs(turn);
-      collected.push({ role, clone, contentEl: turn });
-    }
+/**
+ * STAGE 1: Mount & Sweep Engine
+ * Ensures any dynamic/virtualized chat container mounts its full conversational tree
+ * by systematically traversing from top to bottom.
+ */
+class ChatMountEngine {
+  constructor(options = {}) {
+    this.options = Object.assign({
+      stepFraction: 0.7,
+      stepMin: 350,
+      stepDelayMs: 60,
+      initialTopDelayMs: 150
+    }, options);
   }
 
-  // If container is scrollable, scroll to top first to ensure earlier turns are loaded
-  if (scrollContainer && scrollContainer.scrollHeight > clientHeight + 50) {
-    if (isDoc) window.scrollTo({ top: 0, behavior: 'instant' });
-    else scrollContainer.scrollTop = 0;
-    await new Promise(r => setTimeout(r, 180));
-    recordVisibleTurns();
-
-    // Sweep downwards through the container in overlapping steps
-    let maxScroll = scrollContainer.scrollHeight - clientHeight;
-    let curr = 0;
-    const step = Math.max(350, Math.floor(clientHeight * 0.7));
-
-    while (curr < maxScroll) {
-      curr = Math.min(curr + step, maxScroll);
-      if (isDoc) window.scrollTo({ top: curr, behavior: 'instant' });
-      else scrollContainer.scrollTop = curr;
-
-      await new Promise(r => setTimeout(r, 80));
-      recordVisibleTurns();
-
-      // Recalculate maxScroll as new virtual items mount
-      maxScroll = scrollContainer.scrollHeight - clientHeight;
-      if (curr >= maxScroll) break;
-    }
-  } else {
-    // Single-screen container or non-scrollable
-    recordVisibleTurns();
-  }
-
-  // Restore initial scroll position
-  if (isDoc) window.scrollTo({ top: initialScrollTop, behavior: 'instant' });
-  else if (scrollContainer) scrollContainer.scrollTop = initialScrollTop;
-
-  return collected;
-}
-
-// Scrape chat messages by platform with self-adapting DOM change detection
-async function getChatMessages(platform) {
-  const messages = [];
-  const url = window.location.href;
-  const savedScroll = saveScrollPositions();
-
-  try {
-    // 1. Dispatch beforeprint event so React/Atlaskit/virtualizers mount all conversation turns
+  async sweep() {
     try {
       window.dispatchEvent(new Event('beforeprint'));
-    } catch (e) {
-      console.warn('beforeprint dispatch non-fatal:', e);
+    } catch (e) {}
+    await new Promise(r => setTimeout(r, 100));
+
+    const hiddenOverlays = hideOverlays();
+    const savedScroll = saveScrollPositions();
+
+    const innerScroller = findChatScrollContainer();
+    const isDoc = !innerScroller || innerScroller === document.documentElement || innerScroller === document.body;
+
+    const initialScrollTop = isDoc ? window.scrollY : innerScroller.scrollTop;
+    const clientHeight = innerScroller && !isDoc ? innerScroller.clientHeight : window.innerHeight;
+    let totalTraversed = 0;
+
+    try {
+      // 1. Scroll to top on both window and inner scroller
+      window.scrollTo({ top: 0, behavior: 'instant' });
+      if (innerScroller && !isDoc) {
+        innerScroller.scrollTop = 0;
+      }
+      await new Promise(r => setTimeout(r, this.options.initialTopDelayMs));
+
+      // 2. Pre-capture cross-origin iframes
+      await captureCrossoriginIframes();
+
+      // 3. Sweep downwards if scrollable
+      let scrollHeight = isDoc ? (document.documentElement ? document.documentElement.scrollHeight : 0) : innerScroller.scrollHeight;
+      let maxScroll = Math.max(0, scrollHeight - clientHeight);
+
+      if (maxScroll > 50) {
+        let curr = 0;
+        const step = Math.max(this.options.stepMin, Math.floor(clientHeight * this.options.stepFraction));
+
+        while (curr < maxScroll) {
+          curr = Math.min(curr + step, maxScroll);
+          window.scrollTo({ top: curr, behavior: 'instant' });
+          if (innerScroller && !isDoc) {
+            innerScroller.scrollTop = curr;
+          }
+
+          await new Promise(r => setTimeout(r, this.options.stepDelayMs));
+          totalTraversed = curr;
+
+          scrollHeight = isDoc ? (document.documentElement ? document.documentElement.scrollHeight : 0) : innerScroller.scrollHeight;
+          maxScroll = Math.max(0, scrollHeight - clientHeight);
+          if (curr >= maxScroll) break;
+        }
+      }
+
+      await captureCrossoriginIframes();
+
+      // GATE 1: Verify Mount Settle
+      const gate1 = this.verifyGate1({ isDoc, totalTraversed, maxScroll });
+      if (!gate1.passed) {
+        console.warn('[GATE 1 WARNING]:', gate1.reason);
+      }
+
+      return { success: true, totalTraversed, gate1 };
+    } finally {
+      try {
+        window.dispatchEvent(new Event('afterprint'));
+      } catch (e) {}
+      restoreScrollPositions(savedScroll);
+      restoreOverlays(hiddenOverlays);
     }
-    await new Promise(r => setTimeout(r, 200));
+  }
 
-    // 2. Capture cross-origin iframes
-    await captureCrossoriginIframes();
+  verifyGate1({ isDoc, totalTraversed, maxScroll }) {
+    if (!document.body || document.body.children.length === 0) {
+      return { passed: false, reason: 'Document body is empty after sweep.' };
+    }
+    return { passed: true, reason: 'DOM mounted and swept successfully.' };
+  }
+}
 
-    // 3. Define platform query function
-    let queryFn = null;
+/**
+ * STAGE 2: Comprehensive Chat Element & Turn Inventory Engine
+ * Inspects all conversation islands, catalogs sub-components (tables, code blocks,
+ * charts, images, surveys, sources), and indexes them in exact natural DOM order.
+ */
+class ChatInventoryEngine {
+  constructor(options = {}) {
+    this.options = options;
+  }
 
-    if (platform === 'ChatGPT' || url.includes('chatgpt.com') || url.includes('chat.openai.com')) {
-      const isSharePage = url.includes('/share/');
-      queryFn = () => {
-        // Priority 1: Direct explicit individual message nodes
-        const explicitMessages = Array.from(document.querySelectorAll(
-          '[data-message-author-role="user"], [data-message-author-role="assistant"]'
+  async inspect(platform) {
+    const url = typeof window !== 'undefined' && window.location ? window.location.href : '';
+
+    let candidateTurns = [];
+
+    // 1. Platform-specific island discovery
+    if (platform === 'Gemini' || url.includes('gemini.google') || document.querySelectorAll('share-turn-viewer').length > 0) {
+      const isShare = url.includes('/share/') || url.includes('share.gemini.google') || document.querySelectorAll('share-turn-viewer').length > 0;
+      if (isShare) {
+        const shareTurns = extractGeminiShareMessages(document);
+        if (shareTurns.length > 0) {
+          candidateTurns = shareTurns;
+        }
+      }
+      if (candidateTurns.length === 0) {
+        const liveElements = Array.from(document.querySelectorAll(
+          'user-query, model-response, message-content, [class*="model-response-text" i], [class*="query-text" i], .query-text-container, .model-response-container'
         ));
-        if (explicitMessages.length > 0) return explicitMessages;
-
-        // Priority 2: Split compound articles or conversation turns
-        const containers = Array.from(document.querySelectorAll(
-          'article, [data-testid^="conversation-turn-"], [data-testid*="conversation-turn"]'
-        ));
-        if (containers.length > 0) {
-          const splitMessages = [];
-          for (const container of containers) {
-            const userPart = container.querySelector('[data-message-author-role="user"]') ||
-                             container.querySelector('.font-user-message, div[class*="user-message" i], div[class*="user_message" i]');
-            const asstPart = container.querySelector('[data-message-author-role="assistant"]') ||
-                             container.querySelector('.markdown, div[class*="markdown" i], [class*="agent-turn" i]');
-            if (userPart && asstPart && userPart !== asstPart) {
-              splitMessages.push(userPart);
-              splitMessages.push(asstPart);
+        const unique = getUniqueElements(liveElements);
+        candidateTurns = unique.map((el, i) => ({
+          role: classifyTurnRole(el, i, unique.length),
+          contentEl: el
+        }));
+      }
+    } else if (platform === 'ChatGPT' || url.includes('chatgpt.com') || url.includes('chat.openai.com')) {
+      const isShare = url.includes('/share/');
+      const explicit = Array.from(document.querySelectorAll('[data-message-author-role="user"], [data-message-author-role="assistant"]'));
+      if (explicit.length > 0) {
+        candidateTurns = explicit.map(el => ({
+          role: (el.getAttribute('data-message-author-role') || '').toLowerCase(),
+          contentEl: el
+        }));
+      } else {
+        const articles = Array.from(document.querySelectorAll('article, [data-testid*="conversation-turn"]'));
+        if (articles.length > 0) {
+          for (const art of articles) {
+            const userSub = art.querySelector('[data-message-author-role="user"], .font-user-message, div[class*="user-message" i], div[class*="user_message" i]');
+            const asstSub = art.querySelector('[data-message-author-role="assistant"], .markdown, div[class*="markdown" i], [class*="agent-turn" i]');
+            if (userSub && asstSub && userSub !== asstSub) {
+              candidateTurns.push({ role: 'user', contentEl: userSub });
+              candidateTurns.push({ role: 'assistant', contentEl: asstSub });
             } else {
-              splitMessages.push(container);
+              candidateTurns.push({ role: classifyTurnRole(art, candidateTurns.length), contentEl: art });
             }
           }
-          if (splitMessages.length > 0) return splitMessages;
+        } else if (isShare) {
+          candidateTurns = extractChatGPTShareMessages();
         }
-
-        // Priority 3: Share page extractor (DOM structure or streaming payload fallback)
-        if (isSharePage) {
-          const shareTurns = extractChatGPTShareMessages();
-          return shareTurns.map(t => t.contentEl);
-        }
-        return [];
-      };
+      }
     } else if (platform === 'Claude' || url.includes('claude.ai')) {
-      queryFn = () => Array.from(document.querySelectorAll(
+      const claudeEls = Array.from(document.querySelectorAll(
         '.font-user-message, .font-claude-message, [data-testid="user-message"], [data-testid="assistant-message"], ' +
         'div[class*="font-user"], div[class*="font-claude"], div[class*="user-message"], div[class*="claude-message"], ' +
         'div[class*="assistant-message"], .user-message, .claude-message'
       ));
-    } else if (platform === 'Gemini' || url.includes('gemini.google.com')) {
-      queryFn = () => Array.from(document.querySelectorAll(
-        'user-query, model-response, .query-text-container, .model-response-container, ' +
-        'div[class*="query"], div[class*="response"], div[class*="message-content"]'
-      ));
+      const unique = getUniqueElements(claudeEls);
+      candidateTurns = unique.map((el, i) => ({
+        role: classifyTurnRole(el, i, unique.length),
+        contentEl: el
+      }));
     } else if (platform === 'Perplexity' || url.includes('perplexity.ai')) {
-      queryFn = () => Array.from(document.querySelectorAll(
-        '[data-testid*="query" i], [data-testid*="answer" i], [class*="query" i], [class*="answer" i], ' +
-        '[class*="prose" i], .default.font-sans, h1.text-textMain, div[class*="Query" i], div[class*="Answer" i]'
-      )).filter(el => {
-        if (el.closest('form, footer, [class*="composer" i], [class*="toolbar" i], nav, header')) return false;
-        if (el.querySelector('textarea, input[type="text"]:not([readonly])')) return false;
-        return true;
-      });
-    } else if (platform === 'Rovo' || url.includes('atlassian.net') || url.includes('atlassian.com')) {
+      candidateTurns = extractPerplexityMessages();
+    } else if (platform === 'Rovo' || url.includes('atlassian')) {
       const isComposerOrToolbar = (el) => {
         if (!el) return false;
-        if (el.matches && el.matches('form, [data-testid="composer"], [data-testid="chat-composer"], footer[role="contentinfo"]')) {
-          return true;
-        }
-        if (el.closest && el.closest('form, [data-testid="composer"], [data-testid="chat-composer"], footer[role="contentinfo"]')) {
-          return true;
-        }
-        if (el.querySelector && el.querySelector('textarea:not([readonly]), [contenteditable="true"]:not([contenteditable="false"])')) {
-          return true;
-        }
+        if (el.matches && el.matches('form, [data-testid="composer"], [data-testid="chat-composer"], footer[role="contentinfo"]')) return true;
+        if (el.closest && el.closest('form, [data-testid="composer"], [data-testid="chat-composer"], footer[role="contentinfo"]')) return true;
+        if (el.querySelector && el.querySelector('textarea:not([readonly]), [contenteditable="true"]:not([contenteditable="false"])')) return true;
         return false;
       };
-
       const rovoSelectors = [
         '[data-testid="chat-message"]:not([data-testid*="list"]):not([data-testid*="scroll"])',
         '[data-testid*="message-item" i]',
@@ -1701,64 +1773,160 @@ async function getChatMessages(platform) {
         'div[class*="agent-message" i]',
         'div[class*="assistant-message" i]'
       ].join(', ');
-
-      queryFn = () => Array.from(document.querySelectorAll(rovoSelectors)).filter(el => !isComposerOrToolbar(el));
+      const rovoEls = Array.from(document.querySelectorAll(rovoSelectors)).filter(el => !isComposerOrToolbar(el));
+      const unique = getUniqueElements(rovoEls);
+      candidateTurns = unique.map((el, i) => ({
+        role: classifyTurnRole(el, i, unique.length),
+        contentEl: el
+      }));
     } else if (platform === 'Grok' || url.includes('grok.com') || url.includes('x.com')) {
-      queryFn = () => Array.from(document.querySelectorAll(
+      const grokEls = Array.from(document.querySelectorAll(
         'div[class*="message" i], div[class*="bubble" i], div[class*="chat-turn" i], div[data-testid*="message" i]'
       ));
-    }
-
-    let extractedTurns = [];
-    if (queryFn) {
-      extractedTurns = await collectTurns(queryFn, platform);
-    }
-
-    // Universal Adaptive Fallback in case platform parsing yielded nothing
-    if (extractedTurns.length === 0) {
-      console.log('No messages found with primary platform selectors. Using adaptive turn discovery engine...');
-      const adaptive = extractAdaptiveTurns(document.body);
-      extractedTurns = adaptive.map(t => ({
-        role: t.role,
-        clone: deepCloneWithShadowsAndSvgs(t.contentEl),
-        contentEl: t.contentEl
+      const unique = getUniqueElements(grokEls);
+      candidateTurns = unique.map((el, i) => ({
+        role: classifyTurnRole(el, i, unique.length),
+        contentEl: el
       }));
     }
 
-    // Process extracted turns: clone, clean UI noise, serialize images & canvases
-    for (let i = 0; i < extractedTurns.length; i++) {
-      const { role, clone, contentEl } = extractedTurns[i];
-      if (!clone) continue;
+    // Universal Adaptive Turn Discovery fallback if primary query yielded nothing
+    if (candidateTurns.length === 0) {
+      const adaptive = extractAdaptiveTurns(document.body);
+      candidateTurns = adaptive.map(t => ({ role: t.role, contentEl: t.contentEl }));
+    }
+
+    // 2. Sort candidate turns strictly by natural loaded DOM document order
+    candidateTurns.sort((a, b) => {
+      if (a.contentEl && b.contentEl && a.contentEl.isConnected && b.contentEl.isConnected && a.contentEl.compareDocumentPosition) {
+        const pos = a.contentEl.compareDocumentPosition(b.contentEl);
+        if (pos & (Node.DOCUMENT_POSITION_DISCONNECTED || 1)) return 0;
+        if (pos & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
+        if (pos & Node.DOCUMENT_POSITION_PRECEDING) return 1;
+      }
+      return 0;
+    });
+
+    // 3. Catalog and normalize each turn & inventory sub-components
+    const inventory = [];
+    const stats = {
+      userCount: 0,
+      asstCount: 0,
+      tables: 0,
+      codeBlocks: 0,
+      charts: 0,
+      media: 0,
+      surveys: 0
+    };
+
+    for (let i = 0; i < candidateTurns.length; i++) {
+      const { role, contentEl } = candidateTurns[i];
+      if (!contentEl) continue;
+
+      // Deep clone node into isolated memory with shadow roots & canvases preserved
+      const clone = deepCloneWithShadowsAndSvgs(contentEl);
 
       // Merge associated subsequent media attachment cards on Atlassian Rovo
-      if (role === 'user' && i + 1 < extractedTurns.length && (platform === 'Rovo' || url.includes('atlassian'))) {
-        const nextTurn = extractedTurns[i + 1];
-        const nextEl = nextTurn ? nextTurn.clone : null;
+      if (role === 'user' && i + 1 < candidateTurns.length && (platform === 'Rovo' || url.includes('atlassian'))) {
+        const nextTurn = candidateTurns[i + 1];
+        const nextEl = nextTurn && nextTurn.contentEl ? nextTurn.contentEl : null;
         if (nextEl && nextEl.matches && nextEl.matches('[data-testid*="media" i], [data-testid*="file" i], [data-testid*="attachment" i], [class*="media-card" i], [class*="file-card" i], [class*="attachment" i]')) {
-          clone.appendChild(nextEl);
+          const nextClone = deepCloneWithShadowsAndSvgs(nextEl);
+          clone.appendChild(nextClone);
           i++;
         }
       }
 
+      // Normalizations
       if (platform === 'Rovo' || url.includes('atlassian')) {
         normalizeSmartLinksAndLists(clone);
+      }
+      if (platform === 'Gemini' || url.includes('gemini.google')) {
+        normalizeGeminiTurn(clone, role);
       }
 
       cleanNoise(clone);
       await processImages(clone);
 
-      const textContent = clone.textContent.trim();
+      const text = clone.textContent.trim();
       const hasMedia = clone.querySelector('img, canvas, svg, iframe, table');
-      if (textContent || hasMedia) {
-        messages.push({ role, html: clone.innerHTML });
-      }
+      if (!text && !hasMedia) continue;
+
+      // Inventory sub-components in this turn
+      const tables = Array.from(clone.querySelectorAll('table'));
+      const codeBlocks = Array.from(clone.querySelectorAll('pre, code.hljs, [class*="code-block" i]'));
+      const charts = Array.from(clone.querySelectorAll('svg, canvas'));
+      const images = Array.from(clone.querySelectorAll('img, .ai-exporter-media-card'));
+      const surveys = Array.from(clone.querySelectorAll('[data-testid*="feedback" i], [class*="feedback" i], .rovo-suggested-prompt'));
+
+      stats.tables += tables.length;
+      stats.codeBlocks += codeBlocks.length;
+      stats.charts += charts.length;
+      stats.media += images.length;
+      stats.surveys += surveys.length;
+
+      if (role === 'user') stats.userCount++;
+      else stats.asstCount++;
+
+      inventory.push({
+        index: i,
+        role,
+        html: clone.innerHTML,
+        contentEl,
+        clone,
+        components: {
+          tablesCount: tables.length,
+          codeBlocksCount: codeBlocks.length,
+          chartsCount: charts.length,
+          imagesCount: images.length,
+          surveysCount: surveys.length,
+          textLength: text.length
+        }
+      });
     }
-  } finally {
-    try {
-      window.dispatchEvent(new Event('afterprint'));
-    } catch (e) {}
-    restoreScrollPositions(savedScroll);
+
+    // 4. GATE 2: Structural Integrity Gate
+    const gate2 = this.verifyGate2(inventory, stats);
+    if (!gate2.passed) {
+      throw new Error(`Gate 2 Integrity Violation: ${gate2.reason}`);
+    }
+
+    return {
+      success: true,
+      turns: inventory,
+      stats,
+      gate2
+    };
   }
 
-  return messages;
+  verifyGate2(inventory, stats) {
+    if (inventory.length === 0) {
+      return { passed: false, reason: 'No conversation turns were found in the DOM.' };
+    }
+    // Prevent prompt-only incomplete export
+    if (stats.userCount > 1 && stats.asstCount === 0) {
+      return {
+        passed: false,
+        reason: `Found ${stats.userCount} user questions but 0 assistant responses. Model responses were stripped or missing from the DOM.`
+      };
+    }
+    return { passed: true, reason: 'Structural integrity verified.' };
+  }
+}
+
+// Scrape chat messages by platform through the unified gated pipeline
+async function getChatMessages(platform) {
+  // Stage 1: Mount & Sweep
+  const mountEngine = new ChatMountEngine();
+  await mountEngine.sweep();
+
+  // Stage 2: Inventory & Inspection
+  const inventoryEngine = new ChatInventoryEngine();
+  const inventoryResult = await inventoryEngine.inspect(platform);
+
+  return inventoryResult.turns.map(t => ({
+    role: t.role,
+    html: t.html,
+    components: t.components
+  }));
 }

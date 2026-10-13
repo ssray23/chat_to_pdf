@@ -56,6 +56,13 @@ describe('Popup Platform Auto-Detection & Messaging Regression Suite', () => {
     expect(document.getElementById('btn-export').disabled).toBe(true);
   });
 
+  test('auto-detects Gemini platform from share.gemini.google URL', async () => {
+    await runPopupScriptWithMockTab('https://share.gemini.google/0eNSVxShHb0H');
+    expect(document.getElementById('status-title').textContent).toContain('Gemini Chat Detected');
+    expect(document.getElementById('btn-export-md').disabled).toBe(false);
+    expect(document.getElementById('btn-export').disabled).toBe(true);
+  });
+
   test('auto-detects Rovo platform from active tab URL', async () => {
     await runPopupScriptWithMockTab('https://mycompany.atlassian.net/jira/rovo');
     expect(document.getElementById('status-title').textContent).toContain('Rovo Chat Detected');

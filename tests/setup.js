@@ -21,7 +21,10 @@ global.chrome = {
   },
   tabs: {
     query: jest.fn(() => Promise.resolve([{ id: 1, title: 'Test Chat', url: 'https://claude.ai/chat/123' }])),
-    sendMessage: jest.fn((tabId, msg) => Promise.resolve({ success: true, messages: [] })),
+    sendMessage: jest.fn((tabId, msg) => {
+      if (msg && msg.action === 'ping') return Promise.resolve({ pong: true, version: '1.2.1' });
+      return Promise.resolve({ success: true, messages: [] });
+    }),
     create: jest.fn((opts) => Promise.resolve({ id: 2, ...opts })),
     captureVisibleTab: jest.fn((windowId, options, callback) => {
       const dataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
