@@ -22,7 +22,7 @@ global.chrome = {
   tabs: {
     query: jest.fn(() => Promise.resolve([{ id: 1, title: 'Test Chat', url: 'https://claude.ai/chat/123' }])),
     sendMessage: jest.fn((tabId, msg) => {
-      if (msg && msg.action === 'ping') return Promise.resolve({ pong: true, version: '1.2.8' });
+      if (msg && msg.action === 'ping') return Promise.resolve({ pong: true, version: '1.2.9' });
       return Promise.resolve({ success: true, messages: [] });
     }),
     create: jest.fn((opts) => Promise.resolve({ id: 2, ...opts })),
