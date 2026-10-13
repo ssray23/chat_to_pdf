@@ -116,10 +116,11 @@ document.addEventListener('DOMContentLoaded', async () => {
       try {
         let response;
         let needsInject = false;
+        const currentVersion = (chrome.runtime && chrome.runtime.getManifest && chrome.runtime.getManifest().version) || '1.2.2';
 
         try {
           const pingRes = await chrome.tabs.sendMessage(activeTab.id, { action: 'ping' });
-          if (!pingRes || pingRes.version !== '1.2.1') {
+          if (!pingRes || pingRes.version !== currentVersion) {
             needsInject = true;
           }
         } catch (e) {
@@ -128,15 +129,15 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         if (needsInject) {
           try {
-            console.log('Injecting/refreshing latest content script in tab...');
+            console.log(`Injecting/refreshing latest v${currentVersion} content script in tab...`);
             await chrome.scripting.executeScript({
               target: { tabId: activeTab.id },
               files: ['content.js']
             });
             await new Promise(resolve => setTimeout(resolve, 350));
             const verifyPing = await chrome.tabs.sendMessage(activeTab.id, { action: 'ping' });
-            if (!verifyPing || verifyPing.version !== '1.2.1') {
-              updateStatus('error', 'Tab Refresh Required', 'Please reload this tab (Cmd+R) so Chrome activates the latest v1.2.1 extension.');
+            if (!verifyPing || verifyPing.version !== currentVersion) {
+              updateStatus('error', 'Tab Refresh Required', `Please reload this tab (Cmd+R) so Chrome activates the latest v${currentVersion} extension.`);
               btnExportMd.innerHTML = '<span>Reload Tab (Cmd+R)</span>';
               btnExportMd.disabled = false;
               btnExportMd.onclick = () => {
@@ -147,7 +148,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
           } catch (injectErr) {
             console.warn('Script injection attempt:', injectErr);
-            updateStatus('error', 'Tab Refresh Required', 'Please reload this tab (Cmd+R) to apply the latest v1.2.1 update.');
+            updateStatus('error', 'Tab Refresh Required', `Please reload this tab (Cmd+R) to apply the latest v${currentVersion} update.`);
             btnExportMd.innerHTML = '<span>Reload Tab (Cmd+R)</span>';
             btnExportMd.disabled = false;
             btnExportMd.onclick = () => {

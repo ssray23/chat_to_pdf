@@ -1,4 +1,4 @@
-const CONTENT_SCRIPT_VERSION = '1.2.1';
+const CONTENT_SCRIPT_VERSION = '1.2.2';
 if (typeof window !== 'undefined') {
   window.__AI_EXPORTER_VERSION__ = CONTENT_SCRIPT_VERSION;
 }
@@ -1454,14 +1454,32 @@ function extractGeminiShareMessages(root = document) {
     for (let i = 0; i < viewers.length; i++) {
       const v = viewers[i];
       const userEl = v.querySelector('user-query');
-      const asstEl = v.querySelector('message-content') || 
-                     v.querySelector('response-container') ||
-                     v.querySelector('[class*="presented-response" i]') ||
-                     v.querySelector('[class*="response-container" i]') ||
-                     v.querySelector('structured-content-container') ||
-                     v.querySelector('model-response') ||
-                     v.querySelector('[class*="model-response-text" i]') || 
-                     v.querySelector('.markdown, div[class*="markdown" i]');
+      let asstEl = v.querySelector('message-content') || 
+                   v.querySelector('response-container') ||
+                   v.querySelector('[class*="presented-response" i]') ||
+                   v.querySelector('[class*="response-container" i]') ||
+                   v.querySelector('structured-content-container') ||
+                   v.querySelector('model-response') ||
+                   v.querySelector('[class*="model-response-text" i]') || 
+                   v.querySelector('.markdown, div[class*="markdown" i]');
+
+      // Check shadowRoot if not found in light DOM
+      if (!asstEl && v.shadowRoot) {
+        asstEl = v.shadowRoot.querySelector('message-content, response-container, [class*="presented-response" i], structured-content-container, model-response, .markdown');
+      }
+
+      // Check siblings within viewer container (Angular custom element slot or wrapper)
+      if (!asstEl && userEl) {
+        let sib = userEl.nextElementSibling;
+        while (sib) {
+          if (!sib.matches('user-query')) {
+            asstEl = sib;
+            break;
+          }
+          sib = sib.nextElementSibling;
+        }
+      }
+
       if (userEl) {
         extracted.push({ role: 'user', contentEl: userEl });
       }
@@ -1702,7 +1720,8 @@ class ChatInventoryEngine {
       const isShare = url.includes('/share/') || url.includes('share.gemini.google') || document.querySelectorAll('share-turn-viewer').length > 0;
       if (isShare) {
         const shareTurns = extractGeminiShareMessages(document);
-        if (shareTurns.length > 0) {
+        const hasAsst = shareTurns.some(t => t.role === 'assistant');
+        if (shareTurns.length > 0 && hasAsst) {
           candidateTurns = shareTurns;
         }
       }
