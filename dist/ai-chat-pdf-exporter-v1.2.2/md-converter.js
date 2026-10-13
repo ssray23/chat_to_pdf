@@ -1061,10 +1061,10 @@
       // 2. Absolutely NO blank lines inside the table (prevents CommonMark HTML block termination)
       return `<!--STEP_CARD_START-->
 <tr>
-<td style="border: none; width: 150px; vertical-align: top; padding: 12px 16px 12px 0;">
+<td style="border: none; width: 176px; vertical-align: top; padding: 16px 20px 16px 16px;">
 <img src="${src}" width="140" style="border-radius: 8px; display: block;" alt="${alt}" />
 </td>
-<td style="border: none; vertical-align: top; padding: 12px 0;">
+<td style="border: none; vertical-align: top; padding: 16px 16px 16px 0;">
 <strong style="font-size: 1.05rem;">${cleanTitle}</strong>
 ${cleanBody ? `<div style="margin-top: 6px; line-height: 1.5;">${cleanBody}</div>` : ''}
 </td>
@@ -1137,6 +1137,9 @@ ${cleanBody ? `<div style="margin-top: 6px; line-height: 1.5;">${cleanBody}</div
 
     // Process Conversation Turns
     const messages = chatData.messages || [];
+    let lastRenderedRole = null;
+    let lastRenderedText = '';
+
     for (let i = 0; i < messages.length; i++) {
       const msg = messages[i];
       const isUser = msg.role === 'user';
@@ -1144,9 +1147,18 @@ ${cleanBody ? `<div style="margin-top: 6px; line-height: 1.5;">${cleanBody}</div
       let turnMd = msg.markdown || msg.rawMarkdown || htmlToMarkdown(msg.html, opts);
       if (!turnMd || !turnMd.trim()) continue;
 
+      const cleanTurnText = turnMd.trim().replace(/\s+/g, ' ');
+
+      // Consecutive turn deduplication safeguard
+      if (lastRenderedRole === msg.role) {
+        if (lastRenderedText === cleanTurnText) continue;
+        const minL = Math.min(lastRenderedText.length, cleanTurnText.length);
+        if (minL >= 25 && lastRenderedText.includes(cleanTurnText)) continue;
+      }
+
       if (isUser) {
         // Divider before next user turn if not first turn
-        if (i > 0) {
+        if (lastRenderedRole !== null) {
           doc += '\n\n---\n\n';
         }
 
@@ -1159,8 +1171,12 @@ ${cleanBody ? `<div style="margin-top: 6px; line-height: 1.5;">${cleanBody}</div
         const isSingleLine = rawLines.length === 1 && cleanPrompt.length < 250 && !cleanPrompt.startsWith('#');
 
         if (isSingleLine) {
-          const text = rawLines[0].replace(/^\*\*|\*\*$/g, '');
-          doc += `> ### **${text}**\n\n`;
+          if (cleanPrompt.startsWith('📎')) {
+            doc += `> ${cleanPrompt}\n\n`;
+          } else {
+            const text = rawLines[0].replace(/^\*\*|\*\*$/g, '');
+            doc += `> ### **${text}**\n\n`;
+          }
         } else {
           let cardLines = '';
           let isFirstNonEmpty = true;
@@ -1168,6 +1184,9 @@ ${cleanBody ? `<div style="margin-top: 6px; line-height: 1.5;">${cleanBody}</div
             const trimmed = rawLines[l];
             if (!trimmed) {
               cardLines += '>\n';
+            } else if (trimmed.startsWith('📎')) {
+              cardLines += `> ${trimmed}\n`;
+              // Note: do not set isFirstNonEmpty to false so the prompt text following it gets styled with ###
             } else if (isFirstNonEmpty && !trimmed.startsWith('#') && !trimmed.startsWith('```')) {
               const text = trimmed.replace(/^\*\*|\*\*$/g, '');
               cardLines += `> ### **${text}**\n`;
@@ -1187,6 +1206,9 @@ ${cleanBody ? `<div style="margin-top: 6px; line-height: 1.5;">${cleanBody}</div
         // Assistant response follows directly (matching PDF layout without robotic role headers)
         doc += `${turnMd}\n\n`;
       }
+
+      lastRenderedRole = msg.role;
+      lastRenderedText = cleanTurnText;
     }
 
     // Run post-processing on entire document

@@ -1,4 +1,4 @@
-const CONTENT_SCRIPT_VERSION = '1.2.11';
+const CONTENT_SCRIPT_VERSION = '1.2.12';
 if (typeof window !== 'undefined') {
   window.__AI_EXPORTER_VERSION__ = CONTENT_SCRIPT_VERSION;
 }
@@ -616,16 +616,39 @@ function cleanNoise(clone) {
   });
 
   // Detect and normalize ChatGPT file attachments in prompts into structured attachment pills
-  clone.querySelectorAll('[data-testid*="attachment" i], [data-testid*="file" i], [class*="file" i], [class*="attachment" i]').forEach(el => {
+  const attachmentExts = 'md|markdown|pdf|docx?|xlsx?|csv|txt|json|py|js|ts|jsx|tsx|html|css|yaml|yml|xml|log|sh|sql|zip|tar|gz';
+  const fileRegex = new RegExp('([a-zA-Z0-9_\\-\\.]+\\.(?:' + attachmentExts + '))(?:Document|File|Spreadsheet|Presentation|Archive|PDF|Text|Code|\\b|$)', 'i');
+
+  clone.querySelectorAll('[data-testid*="attachment" i], [data-testid*="file" i], [class*="file" i], [class*="attachment" i], [aria-label*="attachment" i], [aria-label*="file" i]').forEach(el => {
+    if (el.tagName === 'PRE' || el.tagName === 'CODE' || el.hasAttribute('data-message-author-role')) return;
+    if (el.querySelector('img, svg, canvas, video, audio') || el.classList.contains('media-card-view')) return;
     const text = el.textContent.trim();
-    const fileMatch = text.match(/([a-zA-Z0-9_\-.]+\.(?:pdf|docx?|xlsx?|csv|txt|json|py|js|html|zip|tar|gz))\b/i);
+    const fileMatch = text.match(fileRegex);
     if (fileMatch) {
-      const fileName = fileMatch[1];
+      const fileName = fileMatch[1].trim();
       const pill = document.createElement('div');
       pill.className = 'ai-exporter-file-attachment';
       pill.setAttribute('data-filename', fileName);
       pill.textContent = fileName;
       el.replaceWith(pill);
+    }
+  });
+
+  // Secondary scan for any small widget containing a file name followed by Document/File
+  clone.querySelectorAll('div, a, span').forEach(el => {
+    if (el.classList.contains('ai-exporter-file-attachment') || el.classList.contains('media-card-view')) return;
+    if (el.querySelector('img, svg, canvas, video, audio')) return;
+    if (el.children.length <= 3 && el.textContent.length < 100 && !el.querySelector('pre, code, table, p, h1, h2, h3, h4')) {
+      const text = el.textContent.trim();
+      const match = text.match(new RegExp('^([a-zA-Z0-9_\\-\\.]+\\.(?:' + attachmentExts + '))(?:Document|File|Spreadsheet|Presentation|Archive|PDF|Text|Code)?$', 'i'));
+      if (match) {
+        const fileName = match[1].trim();
+        const pill = document.createElement('div');
+        pill.className = 'ai-exporter-file-attachment';
+        pill.setAttribute('data-filename', fileName);
+        pill.textContent = fileName;
+        el.replaceWith(pill);
+      }
     }
   });
 
@@ -1515,7 +1538,12 @@ function extractChatGPTLiveMessages(root = document) {
 
   // 1. Explicit author role elements
   const explicit = Array.from(root.querySelectorAll('[data-message-author-role="user"], [data-message-author-role="assistant"]'))
-    .filter(el => !isInsideComposerOrNav(el));
+    .filter(el => !isInsideComposerOrNav(el))
+    .filter(el => {
+      if (el.getAttribute('aria-hidden') === 'true' || (el.closest && el.closest('[aria-hidden="true"]'))) return false;
+      if (el.classList && (el.classList.contains('sr-only') || el.classList.contains('invisible'))) return false;
+      return true;
+    });
   if (explicit.length > 0) {
     const uniqueExplicit = getUniqueElements(explicit);
     Logger.stage2(`Matched ${uniqueExplicit.length} explicit author-role ChatGPT turns.`);
@@ -2278,6 +2306,45 @@ class ChatInventoryEngine {
       if (!text && !hasMedia) {
         Logger.stage2(`[Turn ${i + 1}] Filtered out empty turn <${contentEl.tagName}>`);
         continue;
+      }
+
+      // Deduplicate consecutive identical or subset turns (e.g. ChatGPT responsive/sr duplicates)
+      const lastTurn = inventory.length > 0 ? inventory[inventory.length - 1] : null;
+      if (lastTurn && lastTurn.role === role) {
+        const lastText = (lastTurn.clone ? lastTurn.clone.textContent : '').trim().replace(/\s+/g, ' ');
+        const currText = text.replace(/\s+/g, ' ');
+
+        // Case 1: Exact duplicate
+        if (lastText === currText) {
+          Logger.stage2(`[Turn ${i + 1}] Skipping exact consecutive duplicate ${role} turn.`);
+          if (hasMedia && !lastTurn.clone.querySelector('img, canvas, svg, table, .ai-exporter-file-attachment')) {
+            lastTurn.clone = clone;
+            lastTurn.html = clone.innerHTML;
+            lastTurn.contentEl = contentEl;
+          }
+          continue;
+        }
+
+        // Case 2: Substring / superset duplicate for substantive turns (>= 25 characters)
+        const minLen = Math.min(lastText.length, currText.length);
+        if (minLen >= 25) {
+          if (lastText.includes(currText)) {
+            // Current turn is an incomplete subset/echo of last turn; skip current turn
+            Logger.stage2(`[Turn ${i + 1}] Skipping subset consecutive ${role} turn (${currText.length} chars inside ${lastText.length} chars).`);
+            continue;
+          } else if (currText.includes(lastText)) {
+            // Current turn is a superset (e.g. contains attachment pill + prompt text); upgrade previous turn
+            Logger.stage2(`[Turn ${i + 1}] Upgrading previous ${role} turn with superset (${currText.length} chars vs ${lastText.length} chars).`);
+            if (role === 'user') stats.userCount--; else stats.asstCount--;
+            stats.tables -= lastTurn.components.tablesCount;
+            stats.codeBlocks -= lastTurn.components.codeBlocksCount;
+            stats.charts -= lastTurn.components.chartsCount;
+            stats.media -= lastTurn.components.imagesCount;
+            stats.surveys -= lastTurn.components.surveysCount;
+            inventory.pop();
+            // Proceed to add current turn below
+          }
+        }
       }
 
       // Inventory sub-components in this turn

@@ -561,7 +561,7 @@ What next?
       const result = convertChatToMarkdown(chatData);
 
       expect(result.markdown).toContain('<table style="border: none; border-collapse: collapse; width: 100%;">');
-      expect(result.markdown).toContain('<td style="border: none; width: 150px; vertical-align: top; padding: 12px 16px 12px 0;">');
+      expect(result.markdown).toContain('<td style="border: none; width: 176px; vertical-align: top; padding: 16px 20px 16px 16px;">');
       expect(result.markdown).toContain('<img src="https://example.com/step1.jpg" width="140"');
       expect(result.markdown).toContain('1. Build the aromatic base');
       expect(result.markdown).toContain('style="border-top: 1px solid #e5e5e5;"');
@@ -570,7 +570,42 @@ What next?
       expect(result.markdown).not.toMatch(/<td[^>]*>[\s\S]*?<ul[\s\S]*?<\/td>/i);
       expect(result.markdown).not.toMatch(/<td[^>]*>[\s\S]*?<li[\s\S]*?<\/td>/i);
     });
-  });
 
+    test('deduplicates consecutive identical or subset user prompts and formats file attachments', () => {
+      const chatData = {
+        platform: 'ChatGPT',
+        title: 'Tamarind Chicken Dinner Recipe',
+        messages: [
+          {
+            role: 'user',
+            html: '<div class="whitespace-pre-wrap"><div class="ai-exporter-file-attachment" data-filename="Quick_low_carb_chicken_breast_recipe-Claude.md">Quick_low_carb_chicken_breast_recipe-Claude.md</div>tell me how to take this marinated chicken to something tasty I can have later for dinner.. i also have tamarid paste</div>'
+          },
+          {
+            role: 'user',
+            html: '<div class="whitespace-pre-wrap">tell me how to take this marinated chicken to something tasty I can have later for dinner.. i also have tamarid paste</div>'
+          },
+          {
+            role: 'user',
+            html: '<div class="whitespace-pre-wrap">tell me how to take this marinated chicken to something tasty I can have later for dinner.. i also have tamarid paste</div>'
+          },
+          {
+            role: 'assistant',
+            html: '<div class="markdown"><p>Here is your delicious recipe!</p></div>'
+          }
+        ]
+      };
+
+      const result = convertChatToMarkdown(chatData);
+
+      // Verify the prompt question is rendered only once, not 3 times
+      const occurrences = (result.markdown.match(/tell me how to take this marinated chicken/g) || []).length;
+      expect(occurrences).toBe(1);
+
+      // Verify file attachment pill is cleanly formatted
+      expect(result.markdown).toContain('📎 **Quick_low_carb_chicken_breast_recipe-Claude.md**');
+      expect(result.markdown).toContain('### **tell me how to take this marinated chicken');
+      expect(result.markdown).not.toContain('mdDocument');
+    });
+  });
 });
 
