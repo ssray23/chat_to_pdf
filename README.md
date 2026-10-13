@@ -155,6 +155,12 @@ To guarantee a clean layout when printing or viewing:
 16. **Upward Mount Convergence Loop for Virtualized Chats ([content.js](<./content.js>)):**
     - Detects virtualized chat scrollers (`<infinite-scroller>`, `chat-window`, Angular/CDK scroll containers) and pulses `scrollTop = 0` until all historical earlier turns are fetched and mounted into the DOM.
     - Eliminates missing start turns in long conversations, guaranteeing complete exports from the initial prompt through to the final response.
+17. **ChatGPT Reasoning Models & Virtualized Share Integrity (v1.2.18, [content.js](<./content.js>), [popup/popup.js](<./popup/popup.js>)):**
+    - **Non-Destructive Reasoning Cleaner**: Scopes collapsible reasoning stripping (`Worked for Xs` / `Thought for Xs`) strictly to leaf button triggers using exact text anchors, preventing accidental stripping of substantive assistant markdown responses.
+    - **Reasoning Stub False-Positive Guard**: Fixed `isReasoningStub` in `verifyGate2` with strict length thresholds and boundary anchors so long assistant responses starting with a reasoning label are never falsely classified as incomplete stubs.
+    - **Author-Role Fallthrough**: Prevents early termination when only user questions have explicit author roles, guaranteeing automatic fallthrough to container `<article>` pairing and `.markdown` block extraction.
+    - **Incremental Mount Sweep Accumulator**: Implemented incremental snapshot accumulation in `ChatMountEngine` during both upward and downward sweeps, preserving turns even if unmounted by React virtualization.
+    - **Direct React In-Memory Extraction**: Added MAIN-world React Router context and Fiber inspection in `popup.js` to extract `linear_conversation` directly from memory in ~15ms, bypassing DOM virtualization and CORS restrictions on public share pages.
 
 ---
 
