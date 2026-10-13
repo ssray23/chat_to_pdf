@@ -568,5 +568,83 @@ describe('Content Script Scraper & DOM Manipulation Regression Suite', () => {
     expect(messages[3].role).toBe('assistant');
     expect(messages[3].html).toContain('Answer 2: 16-hour fasting is fine.');
   });
+
+  test('getChatMessages fetches SSR HTML when React hydration has removed stream scripts from DOM', async () => {
+    eval(contentJsCode + `
+      window.getChatMessages = getChatMessages;
+    `);
+
+    const linearConversation = [
+      {
+        message: {
+          id: 'turn-1',
+          author: { role: 'user' },
+          content: { parts: ['Question: Morning espresso cortisol'] }
+        }
+      },
+      {
+        message: {
+          id: 'turn-2',
+          author: { role: 'assistant' },
+          content: { parts: ['Answer: Espresso does not sabotage fat loss.'] }
+        }
+      }
+    ];
+
+    const turboArray = [
+      { _1: 2 },
+      'loaderData',
+      { _3: 4 },
+      'routes/share.$shareId.($action)',
+      { _5: 6 },
+      'serverResponse',
+      { _7: 8 },
+      'data',
+      { _9: 10 },
+      'linear_conversation',
+      linearConversation
+    ];
+
+    const mockSSRHtml = `
+      <!DOCTYPE html>
+      <html>
+        <head><title>Share Chat</title></head>
+        <body>
+          <script>
+            window.__reactRouterContext.streamController.enqueue(${JSON.stringify(JSON.stringify(turboArray))});
+          </script>
+        </body>
+      </html>
+    `;
+
+    // Live DOM has NO scripts (React removed them) and only an unmounted turn with a reasoning button
+    document.body.innerHTML = `
+      <main>
+        <div data-message-author-role="user">Question: Morning espresso cortisol</div>
+        <div data-message-author-role="assistant">
+          <button>Worked for 20s</button>
+        </div>
+      </main>
+    `;
+
+    delete window.location;
+    window.location = new URL('https://chatgpt.com/share/6ace9ec8-6ce0-83eb-886a-3e32e61f5e46');
+
+    window.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      text: () => Promise.resolve(mockSSRHtml)
+    });
+
+    const messages = await window.getChatMessages('ChatGPT');
+    expect(window.fetch).toHaveBeenCalledWith('https://chatgpt.com/share/6ace9ec8-6ce0-83eb-886a-3e32e61f5e46', { credentials: 'include' });
+    expect(messages.length).toBe(2);
+    expect(messages[0].role).toBe('user');
+    expect(messages[0].html).toContain('Morning espresso cortisol');
+    expect(messages[1].role).toBe('assistant');
+    expect(messages[1].html).toContain('Espresso does not sabotage fat loss.');
+    // Must NOT contain the stub reasoning button
+    expect(messages[1].html).not.toContain('Worked for 20s');
+  });
 });
+
 

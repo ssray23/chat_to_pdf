@@ -1,4 +1,4 @@
-const CONTENT_SCRIPT_VERSION = '1.2.15';
+const CONTENT_SCRIPT_VERSION = '1.2.16';
 if (typeof window !== 'undefined') {
   window.__AI_EXPORTER_VERSION__ = CONTENT_SCRIPT_VERSION;
 }
@@ -711,10 +711,10 @@ function cleanNoise(clone) {
     }
   });
 
-  // Remove Claude "Thought for Xs" / reasoning collapsible blocks
+  // Remove Claude & ChatGPT "Thought for Xs" / "Worked for Xs" / reasoning collapsible blocks
   clone.querySelectorAll('button, div, summary, p, span').forEach(el => {
     const text = el.textContent.trim();
-    if (/^thought for \d+s/i.test(text) || /^thought for a few seconds/i.test(text) || /^thinking(\.\.\.)?$/i.test(text)) {
+    if (/^(thought|worked) for (\d+s|a few seconds)/i.test(text) || /^thinking(\.\.\.)?$/i.test(text)) {
       const details = el.closest('details') || el;
       details.remove();
     }
@@ -1340,9 +1340,27 @@ function classifyTurnRole(el, index = 0, totalTurns = 1) {
 }
 
 // Extract ChatGPT /share/ public page content via embedded SSR JSON / Remix Turbo-Stream state
-function extractChatGPTShareSSR(root = document) {
+async function extractChatGPTShareSSR(root = document) {
   const extracted = [];
   try {
+    let targetRoot = root;
+    const hasStreamScript = Array.from(root.querySelectorAll('script')).some(s => (s.textContent || '').includes('streamController.enqueue'));
+
+    // In live browser tabs, React hydration removes streaming bootstrap scripts from the DOM.
+    // If no stream scripts are found in the live DOM, fetch the initial SSR HTML (served from browser cache in ~20ms).
+    if (!hasStreamScript && typeof fetch === 'function' && typeof window !== 'undefined' && window.location && window.location.href && window.location.href.includes('/share/')) {
+      try {
+        const resp = await fetch(window.location.href, { credentials: 'include' });
+        if (resp.ok) {
+          const htmlText = await resp.text();
+          const parser = new (window.DOMParser || DOMParser)();
+          targetRoot = parser.parseFromString(htmlText, 'text/html');
+        }
+      } catch (e) {
+        console.warn('Failed to fetch ChatGPT share page SSR payload:', e);
+      }
+    }
+
     const decodeTurbo = (turbo, index, seen = new Map()) => {
       if (seen.has(index)) return seen.get(index);
       const raw = turbo[index];
@@ -1432,7 +1450,7 @@ function extractChatGPTShareSSR(root = document) {
     };
 
     // First try scripts with streamController.enqueue
-    const scripts = Array.from(root.querySelectorAll('script'));
+    const scripts = Array.from(targetRoot.querySelectorAll('script'));
     for (const script of scripts) {
       const text = script.textContent || '';
       if (text.includes('streamController.enqueue')) {
@@ -1462,7 +1480,7 @@ function extractChatGPTShareSSR(root = document) {
 
     // Next try standard JSON script tags (__NEXT_DATA__, client-bootstrap)
     if (foundMessages.length === 0) {
-      const jsonScripts = root.querySelectorAll('script[type="application/json"], script#__NEXT_DATA__, script#client-bootstrap');
+      const jsonScripts = targetRoot.querySelectorAll('script[type="application/json"], script#__NEXT_DATA__, script#client-bootstrap');
       for (const script of jsonScripts) {
         const raw = script.textContent.trim();
         if (!raw || (!raw.includes('mapping') && !raw.includes('linear_conversation') && !raw.includes('message') && !raw.includes('title'))) continue;
@@ -1480,17 +1498,18 @@ function extractChatGPTShareSSR(root = document) {
     }
 
     if (foundMessages.length > 0) {
+      const docOwner = (root && root.createElement) ? root : document;
       for (const m of foundMessages) {
-        const div = root.createElement('div');
+        const div = docOwner.createElement('div');
         div.setAttribute('data-message-author-role', m.role);
         if (m.attachmentName) {
-          const attachEl = root.createElement('div');
+          const attachEl = docOwner.createElement('div');
           attachEl.className = 'ai-exporter-file-attachment';
           attachEl.setAttribute('data-filename', m.attachmentName);
           attachEl.textContent = m.attachmentName;
           div.appendChild(attachEl);
         }
-        const textEl = root.createElement('div');
+        const textEl = docOwner.createElement('div');
         textEl.className = m.role === 'assistant' ? 'markdown' : 'whitespace-pre-wrap';
         textEl.setAttribute('data-raw-markdown', 'true');
         textEl.textContent = m.text;
@@ -1558,8 +1577,8 @@ function extractChatGPTShareDOM(root = document) {
 }
 
 // Extract ChatGPT /share/ public page content (prioritizes complete SSR JSON/Turbo-Stream payload, with DOM fallback)
-function extractChatGPTShareMessages(root = document) {
-  const ssrTurns = extractChatGPTShareSSR(root);
+async function extractChatGPTShareMessages(root = document) {
+  const ssrTurns = await extractChatGPTShareSSR(root);
   const domTurns = extractChatGPTShareDOM(root);
 
   // If SSR payload provided turns, and contains at least as many turns as the DOM, prefer SSR
@@ -1578,14 +1597,14 @@ function extractChatGPTShareMessages(root = document) {
 }
 
 // Extract ChatGPT live web application content (robust multi-variant discovery)
-function extractChatGPTLiveMessages(root = document) {
+async function extractChatGPTLiveMessages(root = document) {
   const extracted = [];
   const url = typeof window !== 'undefined' && window.location ? window.location.href : '';
   const isShare = url.includes('/share/');
 
   // 0. Share page extraction if URL is /share/
   if (isShare) {
-    const shareTurns = extractChatGPTShareMessages(root);
+    const shareTurns = await extractChatGPTShareMessages(root);
     if (shareTurns.length > 0) return shareTurns;
   }
 
@@ -1686,7 +1705,7 @@ function extractChatGPTLiveMessages(root = document) {
 
   // 4. Share page fallback if URL is /share/
   if (isShare) {
-    return extractChatGPTShareMessages(root);
+    return await extractChatGPTShareMessages(root);
   }
 
   return extracted;
@@ -2160,7 +2179,7 @@ class ChatInventoryEngine {
 
     // 1. Platform-specific island discovery
     if (platform === 'ChatGPT' || url.includes('chatgpt.com') || url.includes('chat.openai.com')) {
-      candidateTurns = extractChatGPTLiveMessages(document);
+      candidateTurns = await extractChatGPTLiveMessages(document);
     } else if (platform === 'Claude' || url.includes('claude.ai')) {
       const claudeEls = Array.from(document.querySelectorAll(
         '.font-user-message, .font-claude-message, [data-testid="user-message"], [data-testid="assistant-message"], ' +
@@ -2264,7 +2283,7 @@ class ChatInventoryEngine {
     if (candidateTurns.length === 0 && (platform === 'ChatGPT' || url.includes('chatgpt.com') || url.includes('chat.openai.com'))) {
       Logger.stage2('Primary discovery yielded 0 turns on ChatGPT. Waiting 800ms for dynamic messages mount...');
       await new Promise(r => setTimeout(r, 800));
-      candidateTurns = extractChatGPTLiveMessages(document);
+      candidateTurns = await extractChatGPTLiveMessages(document);
     }
 
     // Universal Adaptive Turn Discovery fallback if primary query yielded nothing
@@ -2560,8 +2579,14 @@ class ChatInventoryEngine {
     if (inventory.length === 0) {
       return { passed: false, reason: 'No conversation turns were found in the DOM.' };
     }
-    // Prevent prompt-only incomplete export
-    if (stats.userCount > 1 && stats.asstCount === 0) {
+    // Prevent prompt-only or reasoning-stub-only incomplete export
+    const isReasoningStub = (text) => /^(thought|worked) for (\d+s|a few seconds)/i.test(text) || /^thinking(\.\.\.)?$/i.test(text);
+    const substantiveAsstCount = inventory.filter(t => {
+      if (t.role !== 'assistant') return false;
+      const text = (t.clone ? t.clone.textContent : (t.contentEl ? t.contentEl.textContent : '')).trim();
+      return text.length > 0 && !isReasoningStub(text);
+    }).length;
+    if (stats.userCount > 1 && substantiveAsstCount === 0) {
       return {
         passed: false,
         reason: `Found ${stats.userCount} user questions but 0 assistant responses. Model responses were stripped or missing from the DOM.`

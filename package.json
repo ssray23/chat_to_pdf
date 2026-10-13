@@ -1,6 +1,6 @@
 {
   "name": "ai-chat-pdf-exporter",
-  "version": "1.2.15",
+  "version": "1.2.16",
   "description": "Export conversations from Claude, ChatGPT, Gemini, Perplexity, Grok, and Rovo into PDF documents.",
   "main": "content.js",
   "type": "commonjs",

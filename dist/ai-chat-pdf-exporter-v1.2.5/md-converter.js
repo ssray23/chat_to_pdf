@@ -1305,6 +1305,9 @@ ${cleanBody ? `<div style="margin-top: 6px; line-height: 1.5;">${cleanBody}</div
             } else if (trimmed.startsWith('#') || trimmed.startsWith('```') || trimmed.startsWith('- ') || trimmed.startsWith('* ') || /^\d+\.\s/.test(trimmed)) {
               cardLines += `> ${trimmed}\n`;
               isFirstNonEmpty = false;
+            } else if (trimmed.includes('**')) {
+              cardLines += `> ${trimmed}\n`;
+              isFirstNonEmpty = false;
             } else {
               const text = trimmed.replace(/^\*\*|\*\*$/g, '');
               cardLines += `> **${text}**\n`;
