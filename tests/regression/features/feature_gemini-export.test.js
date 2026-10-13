@@ -233,4 +233,52 @@ describe('[FEATURE] Gemini Shared & Live Chat Export Regression Suite', () => {
     expect(rovoMessages[0].role).toBe('user');
     expect(rovoMessages[1].role).toBe('assistant');
   });
+
+  test('getChatMessages extracts 20 questions and 20 answers on live Gemini with single-draft-response-container without Gate 2 violation', async () => {
+    eval(contentJsCode + `
+      window.getChatMessages = getChatMessages;
+    `);
+
+    let chatHtml = '<infinite-scroller class="chat-history">';
+    for (let i = 1; i <= 20; i++) {
+      chatHtml += `
+        <user-query>
+          <div class="query-text">Question ${i}: How does nutritional dum cooking work?</div>
+        </user-query>
+        <response-container class="response-container">
+          <div class="response-container-header">
+            <div class="draft-picker"><button>View other drafts</button></div>
+          </div>
+          <div class="single-draft-response-container">
+            <message-content>
+              <p>Answer ${i}: Dum cooking breaks down collagen into gelatin.</p>
+              <table><thead><tr><th>Metric</th><th>Value</th></tr></thead><tbody><tr><td>Protein</td><td>35g</td></tr></tbody></table>
+            </message-content>
+          </div>
+          <div class="response-container-footer">
+            <div class="message-actions"><button>Copy</button><button>Share</button></div>
+          </div>
+        </response-container>
+      `;
+    }
+    chatHtml += '</infinite-scroller>';
+
+    document.body.innerHTML = chatHtml;
+    delete window.location;
+    window.location = new URL('https://gemini.google.com/app/c8427f91');
+
+    const messages = await window.getChatMessages('Gemini');
+    expect(messages.length).toBe(40);
+
+    const userMessages = messages.filter(m => m.role === 'user');
+    const asstMessages = messages.filter(m => m.role === 'assistant');
+    expect(userMessages.length).toBe(20);
+    expect(asstMessages.length).toBe(20);
+
+    // Verify draft UI was removed while content and table were preserved
+    expect(asstMessages[0].html).toContain('Dum cooking breaks down collagen');
+    expect(asstMessages[0].html).toContain('<table>');
+    expect(asstMessages[0].html).not.toContain('View other drafts');
+    expect(asstMessages[0].html).not.toContain('Copy');
+  });
 });

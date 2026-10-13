@@ -989,10 +989,19 @@ function normalizeGeminiTurn(clone, role) {
   if (!clone) return;
 
   // 1. Remove Gemini UI action bars, draft pickers, and tool drawers
+  // NOTE: Never remove response content containers (.single-draft-response-container, markdown, etc.)!
   clone.querySelectorAll(
-    '.message-actions, button-row, .action-row, .action-area, [data-testid*="draft" i], ' +
-    '[class*="draft" i], .export-menu, .response-feedback, .response-container-header, .response-container-footer'
-  ).forEach(el => el.remove());
+    '.message-actions, button-row, .action-row, .action-area, .draft-picker, ' +
+    '[class*="draft-picker" i], [class*="draft-select" i], [data-testid*="draft-picker" i], ' +
+    '.draft-actions, .export-menu, .response-feedback, .response-container-header, .response-container-footer'
+  ).forEach(el => {
+    // Safety check: Never delete a container that holds the actual response message or markdown
+    if (el.matches && (el.matches('.single-draft-response-container, [class*="single-draft" i]') ||
+        el.querySelector('message-content, .markdown, [class*="model-response-text" i], table, pre'))) {
+      return;
+    }
+    el.remove();
+  });
 
   // 2. On user turns, remove Gemini duplicate internal preview title (<h5>)
   // Gemini renders an <h5> (often ending in an ellipsis "…") as an internal preview/card header
@@ -1223,7 +1232,8 @@ function classifyTurnRole(el, index = 0, totalTurns = 1) {
       /\b(assistant|agent|model-response|message-content|response-container|bot-message|rovo)\b/i.test(testId) ||
       className.includes('model-response-text') ||
       className.includes('presented-response') ||
-      className.includes('response-container')) {
+      className.includes('response-container') ||
+      className.includes('single-draft-response')) {
     return 'assistant';
   }
 
@@ -1765,6 +1775,7 @@ class ChatInventoryEngine {
         Logger.stage2('Querying live Gemini elements from light and custom element DOM...');
         const liveElements = Array.from(document.querySelectorAll(
           'user-query, response-container, [class*="presented-response" i], [class*="response-container" i], ' +
+          '[class*="single-draft-response" i], .single-draft-response-container, ' +
           'structured-content-container, message-content, model-response, [class*="model-response-text" i], ' +
           '[class*="query-text" i], .query-text-container, .model-response-container'
         ));
@@ -2046,45 +2057,50 @@ class ChatInventoryEngine {
       const nextU = (i + 1 < userTurns.length) ? userTurns[i + 1].contentEl : null;
       let asstEl = null;
 
-      // 1. Container / Island search
-      const container = u.closest('share-turn-viewer, [data-testid*="turn" i], [class*="turn" i], [class*="row" i], article') || u.parentElement;
-      if (container) {
-        const candidates = Array.from(container.querySelectorAll(
-          'response-container, [class*="presented-response" i], [class*="response-container" i], ' +
+      // 1. Container / Island search (strictly for per-turn isolated cards, never the global scroller)
+      const containerCandidate = u.closest('share-turn-viewer, [data-testid*="turn" i], [class*="turn" i], [class*="row" i], article');
+      const isGlobalScroller = (c) => !c || c === document.body || c === document.documentElement || (c.matches && c.matches('infinite-scroller, [class*="chat-history" i], [class*="conversation" i], main, [role="main"]'));
+      const hasOtherUserTurns = (c) => c && (
+        (nextU && c.contains(nextU)) ||
+        c.querySelectorAll('user-query, [data-message-author-role="user"]').length > 1
+      );
+
+      if (containerCandidate && !isGlobalScroller(containerCandidate) && !hasOtherUserTurns(containerCandidate)) {
+        const candidates = Array.from(containerCandidate.querySelectorAll(
+          'response-container, [class*="presented-response" i], [class*="response-container" i], [class*="single-draft-response" i], ' +
           'message-content, model-response, structured-content-container, .markdown, [class*="markdown" i], ' +
           '[class*="response" i], [class*="answer" i], .ak-renderer-document, [data-message-author-role="assistant"]'
         )).filter(el => !el.contains(u) && !u.contains(el));
 
         if (candidates.length > 0) {
           asstEl = candidates[candidates.length - 1];
-        } else {
-          const nonUserChildren = Array.from(container.children).filter(c => !c.contains(u) && c !== u && (!nextU || !c.contains(nextU)));
-          if (nonUserChildren.length > 0) {
-            asstEl = nonUserChildren[nonUserChildren.length - 1];
-          }
         }
       }
 
-      // 2. Direct sibling walk
+      // 2. Direct sibling walk between u and nextU
       if (!asstEl) {
         let sib = u.nextElementSibling;
         while (sib && sib !== nextU) {
           if (!sib.contains(u) && (!nextU || !sib.contains(nextU)) && sib.textContent.trim().length > 0) {
-            asstEl = sib;
+            const asstSub = (sib.matches && sib.matches('response-container, [class*="response" i], [class*="presented-response" i], model-response, message-content, structured-content-container, .markdown')) ? sib :
+              sib.querySelector('response-container, [class*="presented-response" i], [class*="response-container" i], [class*="single-draft-response" i], message-content, model-response, structured-content-container, .markdown, [class*="model-response-text" i]');
+            asstEl = asstSub || sib;
             break;
           }
           sib = sib.nextElementSibling;
         }
       }
 
-      // 3. Parent tree sibling walk
+      // 3. Parent tree sibling walk between u and nextU
       if (!asstEl) {
         let p = u.parentElement;
-        while (p && p !== document.body) {
+        while (p && p !== document.body && !isGlobalScroller(p)) {
           let sib = p.nextElementSibling;
           while (sib && (!nextU || !sib.contains(nextU))) {
             if (!sib.contains(u) && sib.textContent.trim().length > 0) {
-              asstEl = sib;
+              const asstSub = (sib.matches && sib.matches('response-container, [class*="response" i], [class*="presented-response" i], model-response, message-content, structured-content-container, .markdown')) ? sib :
+                sib.querySelector('response-container, [class*="presented-response" i], [class*="response-container" i], [class*="single-draft-response" i], message-content, model-response, structured-content-container, .markdown, [class*="model-response-text" i]');
+              asstEl = asstSub || sib;
               break;
             }
             sib = sib.nextElementSibling;
