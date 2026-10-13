@@ -1668,17 +1668,15 @@ class ChatMountEngine {
     Logger.stage1(`Active scroll container: <${innerScroller ? innerScroller.tagName : 'WINDOW'}${innerScroller && innerScroller.className ? '.' + String(innerScroller.className).slice(0, 40) : ''}>, clientHeight: ${clientHeight}`);
 
     try {
-      // 1. Scroll to top on both window and inner scroller
-      window.scrollTo({ top: 0, behavior: 'instant' });
-      if (innerScroller && !isDoc) {
+      // 1. Scroll to top on the active scroller
+      if (isDoc) {
+        window.scrollTo({ top: 0, behavior: 'instant' });
+      } else if (innerScroller) {
         innerScroller.scrollTop = 0;
       }
       await new Promise(r => setTimeout(r, this.options.initialTopDelayMs));
 
-      // 2. Pre-capture cross-origin iframes
-      await captureCrossoriginIframes();
-
-      // 3. Sweep downwards if scrollable
+      // 2. Sweep downwards if scrollable
       let scrollHeight = isDoc ? (document.documentElement ? document.documentElement.scrollHeight : 0) : innerScroller.scrollHeight;
       let maxScroll = Math.max(0, scrollHeight - clientHeight);
       Logger.stage1(`Scroll bounds: scrollHeight=${scrollHeight}, maxScroll=${maxScroll}`);
@@ -1686,12 +1684,17 @@ class ChatMountEngine {
       if (maxScroll > 50) {
         let curr = 0;
         let stepCount = 0;
-        const step = Math.max(this.options.stepMin, Math.floor(clientHeight * this.options.stepFraction));
+        const maxSteps = 15;
+        let step = Math.max(this.options.stepMin, Math.floor(clientHeight * 1.5));
+        if (maxScroll / step > maxSteps) {
+          step = Math.ceil(maxScroll / maxSteps);
+        }
 
         while (curr < maxScroll) {
           curr = Math.min(curr + step, maxScroll);
-          window.scrollTo({ top: curr, behavior: 'instant' });
-          if (innerScroller && !isDoc) {
+          if (isDoc) {
+            window.scrollTo({ top: curr, behavior: 'instant' });
+          } else if (innerScroller) {
             innerScroller.scrollTop = curr;
           }
 
@@ -1705,8 +1708,6 @@ class ChatMountEngine {
         }
         Logger.stage1(`Completed ${stepCount} sweep steps downwards across ${totalTraversed}px.`);
       }
-
-      await captureCrossoriginIframes();
 
       // GATE 1: Verify Mount Settle
       const gate1 = this.verifyGate1({ isDoc, totalTraversed, maxScroll });
