@@ -1,4 +1,4 @@
-const CONTENT_SCRIPT_VERSION = '1.2.3';
+const CONTENT_SCRIPT_VERSION = '1.2.4';
 if (typeof window !== 'undefined') {
   window.__AI_EXPORTER_VERSION__ = CONTENT_SCRIPT_VERSION;
 }
@@ -29,6 +29,10 @@ const Logger = {
 
 // Listen for messages from the popup
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (typeof window !== 'undefined' && window.__AI_EXPORTER_VERSION__ && window.__AI_EXPORTER_VERSION__ !== CONTENT_SCRIPT_VERSION) {
+    // If a newer version of the script is active in the page, ignore messages in this stale closure
+    return false;
+  }
   if (message.action === 'ping') {
     sendResponse({ pong: true, version: CONTENT_SCRIPT_VERSION });
     return true;
