@@ -1926,42 +1926,7 @@ class ChatInventoryEngine {
     let candidateTurns = [];
 
     // 1. Platform-specific island discovery
-    if (platform === 'Gemini' || url.includes('gemini.google') || document.querySelectorAll('share-turn-viewer').length > 0 || document.querySelectorAll('.conversation-container, div[class*="conversation-container" i]').length > 0) {
-      const isShare = url.includes('/share/') || url.includes('share.gemini.google') || document.querySelectorAll('share-turn-viewer').length > 0;
-      if (isShare) {
-        Logger.stage2('Using Gemini share page viewer extractor...');
-        const shareTurns = extractGeminiShareMessages(document);
-        const hasAsst = shareTurns.some(t => t.role === 'assistant');
-        if (shareTurns.length > 0 && hasAsst) {
-          candidateTurns = shareTurns;
-          Logger.stage2(`Extracted ${shareTurns.length} pairwise turns from share-turn-viewer.`);
-        }
-      }
-      if (candidateTurns.length === 0) {
-        // Live Gemini conversation-container turn cards
-        const liveTurns = extractGeminiLiveMessages(document);
-        const hasAsst = liveTurns.some(t => t.role === 'assistant');
-        if (liveTurns.length > 0 && hasAsst) {
-          candidateTurns = liveTurns;
-          Logger.stage2(`Extracted ${liveTurns.length} pairwise turns from live Gemini conversation-container cards.`);
-        }
-      }
-      if (candidateTurns.length === 0) {
-        Logger.stage2('Querying live Gemini elements from light and custom element DOM...');
-        const liveElements = Array.from(document.querySelectorAll(
-          'user-query, response-container, [class*="presented-response" i], [class*="response-container" i], ' +
-          '[class*="single-draft-response" i], .single-draft-response-container, ' +
-          'structured-content-container, message-content, model-response, [class*="model-response-text" i], ' +
-          '[class*="query-text" i], .query-text-container, .model-response-container'
-        ));
-        const unique = getUniqueElements(liveElements);
-        candidateTurns = unique.map((el, i) => ({
-          role: classifyTurnRole(el, i, unique.length),
-          contentEl: el
-        }));
-        Logger.stage2(`Matched ${unique.length} unique Gemini live elements.`);
-      }
-    } else if (platform === 'ChatGPT' || url.includes('chatgpt.com') || url.includes('chat.openai.com')) {
+    if (platform === 'ChatGPT' || url.includes('chatgpt.com') || url.includes('chat.openai.com')) {
       const isShare = url.includes('/share/');
       const explicit = Array.from(document.querySelectorAll('[data-message-author-role="user"], [data-message-author-role="assistant"]'));
       if (explicit.length > 0) {
@@ -2051,6 +2016,41 @@ class ChatInventoryEngine {
         role: classifyTurnRole(el, i, unique.length),
         contentEl: el
       }));
+    } else if (platform === 'Gemini' || url.includes('gemini.google') || document.querySelectorAll('share-turn-viewer').length > 0 || document.querySelectorAll('.conversation-container, div[class*="conversation-container" i]').length > 0) {
+      const isShare = url.includes('/share/') || url.includes('share.gemini.google') || document.querySelectorAll('share-turn-viewer').length > 0;
+      if (isShare) {
+        Logger.stage2('Using Gemini share page viewer extractor...');
+        const shareTurns = extractGeminiShareMessages(document);
+        const hasAsst = shareTurns.some(t => t.role === 'assistant');
+        if (shareTurns.length > 0 && hasAsst) {
+          candidateTurns = shareTurns;
+          Logger.stage2(`Extracted ${shareTurns.length} pairwise turns from share-turn-viewer.`);
+        }
+      }
+      if (candidateTurns.length === 0) {
+        // Live Gemini conversation-container turn cards
+        const liveTurns = extractGeminiLiveMessages(document);
+        const hasAsst = liveTurns.some(t => t.role === 'assistant');
+        if (liveTurns.length > 0 && hasAsst) {
+          candidateTurns = liveTurns;
+          Logger.stage2(`Extracted ${liveTurns.length} pairwise turns from live Gemini conversation-container cards.`);
+        }
+      }
+      if (candidateTurns.length === 0) {
+        Logger.stage2('Querying live Gemini elements from light and custom element DOM...');
+        const liveElements = Array.from(document.querySelectorAll(
+          'user-query, response-container, [class*="presented-response" i], [class*="response-container" i], ' +
+          '[class*="single-draft-response" i], .single-draft-response-container, ' +
+          'structured-content-container, message-content, model-response, [class*="model-response-text" i], ' +
+          '[class*="query-text" i], .query-text-container, .model-response-container'
+        ));
+        const unique = getUniqueElements(liveElements);
+        candidateTurns = unique.map((el, i) => ({
+          role: classifyTurnRole(el, i, unique.length),
+          contentEl: el
+        }));
+        Logger.stage2(`Matched ${unique.length} unique Gemini live elements.`);
+      }
     }
 
     // Dynamic mount retry if primary discovery yielded 0 turns (e.g. freshly reloaded tab)
