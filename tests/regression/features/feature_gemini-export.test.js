@@ -281,4 +281,61 @@ describe('[FEATURE] Gemini Shared & Live Chat Export Regression Suite', () => {
     expect(asstMessages[0].html).not.toContain('View other drafts');
     expect(asstMessages[0].html).not.toContain('Copy');
   });
+
+  test('getChatMessages extracts 20 questions and 20 answers on live Gemini with .conversation-container cards and <model-response>', async () => {
+    eval(contentJsCode + `
+      window.getChatMessages = getChatMessages;
+    `);
+
+    let chatHtml = '<infinite-scroller class="chat-history">';
+    for (let i = 1; i <= 20; i++) {
+      chatHtml += `
+        <div class="conversation-container message-actions-hover-boundary turn-content-visibility ng-star-inserted" id="conv-${i}">
+          <user-query class="ng-star-inserted">
+            <h5>Question ${i}: how will fenugreek extract help?</h5>
+            <div class="query-text"><p>Question ${i}: how will fenugreek extract help?</p></div>
+          </user-query>
+          <model-response class="enable-lr26-response-chrome-updates ng-star-inserted">
+            <div>
+              <div class="model-title">Gemini said</div>
+              <response-container>
+                <model-response-content>
+                  <structured-content-container>
+                    <message-content>
+                      <response-element>
+                        <p>Answer ${i}: Fenugreek mildly inhibits aromatase and helps keep testosterone circulating.</p>
+                        <table><thead><tr><th>Metric</th><th>Result</th></tr></thead><tbody><tr><td>Dosage</td><td>2250mg</td></tr></tbody></table>
+                      </response-element>
+                    </message-content>
+                  </structured-content-container>
+                </model-response-content>
+                <message-actions><button>Copy</button></message-actions>
+              </response-container>
+            </div>
+          </model-response>
+        </div>
+      `;
+    }
+    chatHtml += '</infinite-scroller>';
+
+    document.body.innerHTML = chatHtml;
+    delete window.location;
+    window.location = new URL('https://gemini.google.com/app/fe76f1294308a0c8');
+
+    const messages = await window.getChatMessages('Gemini');
+    expect(messages.length).toBe(40);
+
+    const userMessages = messages.filter(m => m.role === 'user');
+    const asstMessages = messages.filter(m => m.role === 'assistant');
+    expect(userMessages.length).toBe(20);
+    expect(asstMessages.length).toBe(20);
+
+    // Verify user query title h5 was stripped and model response content was extracted
+    expect(userMessages[0].html).not.toContain('<h5');
+    expect(userMessages[0].html).toContain('how will fenugreek extract help?');
+    expect(asstMessages[0].html).toContain('Fenugreek mildly inhibits aromatase');
+    expect(asstMessages[0].html).toContain('<table>');
+    expect(asstMessages[0].html).not.toContain('Gemini said');
+    expect(asstMessages[0].html).not.toContain('Copy');
+  });
 });

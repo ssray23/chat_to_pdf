@@ -1,4 +1,4 @@
-const CONTENT_SCRIPT_VERSION = '1.2.4';
+const CONTENT_SCRIPT_VERSION = '1.2.5';
 if (typeof window !== 'undefined') {
   window.__AI_EXPORTER_VERSION__ = CONTENT_SCRIPT_VERSION;
 }
@@ -1001,11 +1001,20 @@ function normalizeGeminiTurn(clone, role) {
   ).forEach(el => {
     // Safety check: Never delete a container that holds the actual response message or markdown
     if (el.matches && (el.matches('.single-draft-response-container, [class*="single-draft" i]') ||
-        el.querySelector('message-content, .markdown, [class*="model-response-text" i], table, pre'))) {
+        el.querySelector('message-content, structured-content-container, response-element, model-response-content, .markdown, [class*="model-response-text" i], table, pre'))) {
       return;
     }
     el.remove();
   });
+
+  // Remove "Gemini said" internal screen-reader header if present
+  if (role === 'assistant') {
+    clone.querySelectorAll('.model-title, [class*="model-title" i]').forEach(el => {
+      if (/^gemini(\s+said)?$/i.test(el.textContent.trim())) {
+        el.remove();
+      }
+    });
+  }
 
   // 2. On user turns, remove Gemini duplicate internal preview title (<h5>)
   // Gemini renders an <h5> (often ending in an ellipsis "…") as an internal preview/card header
@@ -1470,6 +1479,50 @@ function extractChatGPTShareMessages() {
 
 }
 
+// Extract Gemini live web application content (pairwise .conversation-container cards)
+function extractGeminiLiveMessages(root = document) {
+  const extracted = [];
+  const containers = root.querySelectorAll('.conversation-container, div[class*="conversation-container" i]');
+  Logger.stage2(`Inspecting ${containers.length} live <conversation-container> elements...`);
+
+  if (containers.length > 0) {
+    for (let i = 0; i < containers.length; i++) {
+      const c = containers[i];
+      const userEl = c.querySelector('user-query');
+      let asstEl = c.querySelector('message-content') ||
+                   c.querySelector('structured-content-container') ||
+                   c.querySelector('model-response') ||
+                   c.querySelector('response-container') ||
+                   c.querySelector('[class*="presented-response" i]') ||
+                   c.querySelector('[class*="model-response-text" i]') ||
+                   c.querySelector('.markdown, div[class*="markdown" i]');
+
+      // Direct sibling walk within conversation card if not found by selector
+      if (!asstEl && userEl) {
+        let sib = userEl.nextElementSibling;
+        while (sib) {
+          if (!sib.matches('user-query') && sib.textContent.trim().length > 0) {
+            asstEl = sib;
+            break;
+          }
+          sib = sib.nextElementSibling;
+        }
+      }
+
+      if (userEl) {
+        extracted.push({ role: 'user', contentEl: userEl });
+      }
+      if (asstEl) {
+        const deepContent = asstEl.querySelector('message-content, structured-content-container, [class*="presented-response" i], .markdown');
+        extracted.push({ role: 'assistant', contentEl: deepContent || asstEl });
+      }
+
+      Logger.stage2(`[Live Card ${i + 1}/${containers.length}] Q: ${userEl ? 'found (<' + userEl.tagName + '>)' : 'MISSING'}, A: ${asstEl ? 'found (<' + asstEl.tagName + '>, ' + asstEl.textContent.trim().length + ' chars)' : 'MISSING'}`);
+    }
+  }
+  return extracted;
+}
+
 // Extract Gemini /share/ public page content (DOM pairwise structure)
 function extractGeminiShareMessages(root = document) {
   const extracted = [];
@@ -1764,7 +1817,7 @@ class ChatInventoryEngine {
     let candidateTurns = [];
 
     // 1. Platform-specific island discovery
-    if (platform === 'Gemini' || url.includes('gemini.google') || document.querySelectorAll('share-turn-viewer').length > 0) {
+    if (platform === 'Gemini' || url.includes('gemini.google') || document.querySelectorAll('share-turn-viewer').length > 0 || document.querySelectorAll('.conversation-container, div[class*="conversation-container" i]').length > 0) {
       const isShare = url.includes('/share/') || url.includes('share.gemini.google') || document.querySelectorAll('share-turn-viewer').length > 0;
       if (isShare) {
         Logger.stage2('Using Gemini share page viewer extractor...');
@@ -1773,6 +1826,15 @@ class ChatInventoryEngine {
         if (shareTurns.length > 0 && hasAsst) {
           candidateTurns = shareTurns;
           Logger.stage2(`Extracted ${shareTurns.length} pairwise turns from share-turn-viewer.`);
+        }
+      }
+      if (candidateTurns.length === 0) {
+        // Live Gemini conversation-container turn cards
+        const liveTurns = extractGeminiLiveMessages(document);
+        const hasAsst = liveTurns.some(t => t.role === 'assistant');
+        if (liveTurns.length > 0 && hasAsst) {
+          candidateTurns = liveTurns;
+          Logger.stage2(`Extracted ${liveTurns.length} pairwise turns from live Gemini conversation-container cards.`);
         }
       }
       if (candidateTurns.length === 0) {
@@ -2062,8 +2124,13 @@ class ChatInventoryEngine {
       let asstEl = null;
 
       // 1. Container / Island search (strictly for per-turn isolated cards, never the global scroller)
-      const containerCandidate = u.closest('share-turn-viewer, [data-testid*="turn" i], [class*="turn" i], [class*="row" i], article');
-      const isGlobalScroller = (c) => !c || c === document.body || c === document.documentElement || (c.matches && c.matches('infinite-scroller, [class*="chat-history" i], [class*="conversation" i], main, [role="main"]'));
+      const containerCandidate = u.closest('share-turn-viewer, .conversation-container, div[class*="conversation-container" i], [data-testid*="turn" i], [class*="turn" i], [class*="row" i], article');
+      const isGlobalScroller = (c) => !c || c === document.body || c === document.documentElement || (
+        c.matches && (
+          c.matches('infinite-scroller, [class*="chat-history" i], [class*="conversations-list" i], [class*="chat-window" i], main, [role="main"]') &&
+          !c.matches('.conversation-container, div[class*="conversation-container" i], share-turn-viewer')
+        )
+      );
       const hasOtherUserTurns = (c) => c && (
         (nextU && c.contains(nextU)) ||
         c.querySelectorAll('user-query, [data-message-author-role="user"]').length > 1
