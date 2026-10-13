@@ -2053,6 +2053,35 @@ class ChatInventoryEngine {
       }));
     }
 
+    // Dynamic mount retry if primary discovery yielded 0 turns (e.g. freshly reloaded tab)
+    if (candidateTurns.length === 0 && (platform === 'ChatGPT' || url.includes('chatgpt.com') || url.includes('chat.openai.com'))) {
+      Logger.stage2('Primary discovery yielded 0 turns on ChatGPT. Waiting 800ms for dynamic messages mount...');
+      await new Promise(r => setTimeout(r, 800));
+      const retryExplicit = Array.from(document.querySelectorAll('[data-message-author-role="user"], [data-message-author-role="assistant"]'));
+      if (retryExplicit.length > 0) {
+        Logger.stage2(`Post-wait matched ${retryExplicit.length} explicit author-role ChatGPT turns.`);
+        candidateTurns = retryExplicit.map(el => ({
+          role: (el.getAttribute('data-message-author-role') || '').toLowerCase(),
+          contentEl: el
+        }));
+      } else {
+        const retryArticles = Array.from(document.querySelectorAll('article, [data-testid*="conversation-turn"]'));
+        if (retryArticles.length > 0) {
+          Logger.stage2(`Post-wait matched ${retryArticles.length} ChatGPT article turns.`);
+          for (const art of retryArticles) {
+            const userSub = art.querySelector('[data-message-author-role="user"], .font-user-message, div[class*="user-message" i], div[class*="user_message" i]');
+            const asstSub = art.querySelector('[data-message-author-role="assistant"], .markdown, div[class*="markdown" i], [class*="agent-turn" i]');
+            if (userSub && asstSub && userSub !== asstSub) {
+              candidateTurns.push({ role: 'user', contentEl: userSub });
+              candidateTurns.push({ role: 'assistant', contentEl: asstSub });
+            } else {
+              candidateTurns.push({ role: classifyTurnRole(art, candidateTurns.length), contentEl: art });
+            }
+          }
+        }
+      }
+    }
+
     // Universal Adaptive Turn Discovery fallback if primary query yielded nothing
     if (candidateTurns.length === 0) {
       Logger.stage2('Primary discovery yielded 0 turns. Running Universal Adaptive Turn Discovery...');

@@ -1017,12 +1017,74 @@
     // 8. Clean redundant screen-reader artifact lines if any sneaked through
     out = out.replace(/^[> ]*#{1,6}\s*(?:You said|ChatGPT said|Claude said):?\s*$/gmi, '');
 
-    // 9. Clean up leading/trailing dashes and multiple newlines
+    // 9. Transform sequential step images followed by numbered instructions into clean 2-column card tables
+    out = formatStepImagesIntoTables(out);
+
+    // 10. Clean up leading/trailing dashes and multiple newlines
     out = out
       .replace(/\n{3,}/g, '\n\n')
       .trim();
 
     return out;
+  }
+
+  /**
+   * Transforms sequential step images followed by numbered instructions into clean 2-column card tables
+   */
+  function formatStepImagesIntoTables(text) {
+    if (!text || !text.includes('![')) return text;
+
+    // Pattern matches an image immediately followed by a numbered instruction (e.g. 1. Build the aromatic base)
+    // and subsequent instruction paragraphs up until the next image, heading, or list.
+    const stepRegex = /!\[([^\]]*)\]\(([^)]+)\)\n\n(\d+[\.\)][ \t]*[^\n]+)((?:\n\n(?!\!\[|\#{1,6}|\d+[\.\)]|[ \t]*[-*+]|\<\/?table)[^\n]+)*)/g;
+
+    let matchCount = 0;
+    const tagged = text.replace(stepRegex, (match, alt, src, title, body) => {
+      matchCount++;
+      alt = (alt || 'Step image').trim();
+      src = src.trim();
+      title = title.trim();
+      const cleanBody = (body || '').trim();
+      let bodyHtml = '';
+      if (cleanBody) {
+        bodyHtml = cleanBody.split('\n\n')
+          .map(p => p.trim())
+          .filter(Boolean)
+          .map(p => `<p style="margin: 6px 0 0 0; line-height: 1.5;">${p}</p>`)
+          .join('\n      ');
+      }
+
+      return `<!--STEP_CARD_START-->
+  <tr>
+    <td style="border: none; width: 150px; vertical-align: top; padding: 12px 16px 12px 0;">
+      <img src="${src}" width="140" style="border-radius: 8px; display: block;" alt="${alt}" />
+    </td>
+    <td style="border: none; vertical-align: top; padding: 12px 0;">
+      <strong style="font-size: 1.05rem;">${title}</strong>
+      ${bodyHtml}
+    </td>
+  </tr>
+<!--STEP_CARD_END-->`;
+    });
+
+    if (matchCount === 0) return text;
+
+    // Group adjacent STEP_CARD entries into a single <table>...</table>
+    return tagged.replace(/(?:<!--STEP_CARD_START-->\s*<tr>[\s\S]*?<\/tr>\s*<!--STEP_CARD_END-->\s*)+/g, (groupMatch) => {
+      const rows = groupMatch
+        .replace(/<!--STEP_CARD_START-->/g, '')
+        .replace(/<!--STEP_CARD_END-->/g, '')
+        .trim();
+
+      let rowIndex = 0;
+      const styledRows = rows.replace(/<tr>/g, () => {
+        const style = rowIndex > 0 ? 'style="border-top: 1px solid #e5e5e5;"' : 'style="border: none;"';
+        rowIndex++;
+        return `<tr ${style}>`;
+      });
+
+      return `\n\n<table style="border: none; border-collapse: collapse; width: 100%;">\n${styledRows}\n</table>\n\n`;
+    });
   }
 
   /**
