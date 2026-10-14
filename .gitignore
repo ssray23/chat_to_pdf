@@ -3,4 +3,4 @@
 .gemini/
 *.log
 node_modules/
-
+dist/

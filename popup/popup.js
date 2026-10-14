@@ -79,18 +79,18 @@ document.addEventListener('DOMContentLoaded', async () => {
     activeTab = tabs[0];
     const url = activeTab.url || '';
     
-    if (url.includes('chatgpt.com') || url.includes('chat.openai.com')) {
-      platform = 'ChatGPT';
-    } else if (url.includes('claude.ai')) {
-      platform = 'Claude';
-    } else if (url.includes('gemini.google.com') || url.includes('share.gemini.google')) {
-      platform = 'Gemini';
-    } else if (url.includes('perplexity.ai')) {
-      platform = 'Perplexity';
-    } else if (url.includes('grok.com') || url.includes('x.com/i/grok')) {
-      platform = 'Grok';
-    } else if (url.includes('atlassian.net') || url.includes('atlassian.com')) {
-      platform = 'Rovo';
+    const PLATFORM_URL_MATCHERS = [
+      { platform: 'ChatGPT', match: (u) => u.includes('chatgpt.com') || u.includes('chat.openai.com') },
+      { platform: 'Claude', match: (u) => u.includes('claude.ai') },
+      { platform: 'Gemini', match: (u) => u.includes('gemini.google.com') || u.includes('share.gemini.google') },
+      { platform: 'Perplexity', match: (u) => u.includes('perplexity.ai') },
+      { platform: 'Grok', match: (u) => u.includes('grok.com') || u.includes('x.com/i/grok') },
+      { platform: 'Rovo', match: (u) => u.includes('atlassian.net') || u.includes('atlassian.com') }
+    ];
+
+    const matchedPlatform = PLATFORM_URL_MATCHERS.find(p => p.match(url));
+    if (matchedPlatform) {
+      platform = matchedPlatform.platform;
     }
 
     if (platform) {
@@ -248,9 +248,18 @@ document.addEventListener('DOMContentLoaded', async () => {
                       text = m.content.text;
                     }
                     if (text.trim().length > 0) {
+                      const escapeHtml = (str) => String(str)
+                        .replace(/&/g, '&amp;')
+                        .replace(/</g, '&lt;')
+                        .replace(/>/g, '&gt;')
+                        .replace(/"/g, '&quot;');
+                      const escapedText = escapeHtml(text);
                       turns.push({
                         role,
-                        html: role === 'assistant' ? `<div class="markdown" data-raw-markdown="true">${text}</div>` : `<div class="whitespace-pre-wrap">${text}</div>`,
+                        rawMarkdown: text,
+                        html: role === 'assistant' 
+                          ? `<div class="markdown" data-raw-markdown="true">${escapedText}</div>` 
+                          : `<div class="whitespace-pre-wrap" data-raw-markdown="true">${escapedText}</div>`,
                         components: {
                           tablesCount: (text.match(/\|[\s\S]*?\|/g) || []).length,
                           codeBlocksCount: (text.match(/```[\s\S]*?```/g) || []).length,
